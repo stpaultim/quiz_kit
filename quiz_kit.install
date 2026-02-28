@@ -246,23 +246,25 @@ function quiz_kit_schema() {
 function quiz_kit_install() {
   // --- Node type ---
   $type = node_type_set_defaults(array(
-    'type' => 'quiz_kit_quiz',
-    'name' => t('Quiz'),
-    'base' => 'quiz_kit',
+    'type'        => 'quiz_kit_quiz',
+    'name'        => t('Quiz'),
+    'base'        => 'node_content',
     'description' => t('A quiz with one or more questions.'),
-    'custom' => FALSE,
-    'modified' => FALSE,
-    'locked' => TRUE,
-    'is_new' => TRUE,
-    'settings' => array(
-      'status_default' => NODE_NOT_PUBLISHED,
+    'has_title'   => TRUE,
+    'title_label' => t('Title'),
+    'custom'      => FALSE,
+    'modified'    => FALSE,
+    'locked'      => TRUE,
+    'is_new'      => TRUE,
+    'settings'    => array(
+      'status_default'  => NODE_NOT_PUBLISHED,
       'promote_enabled' => FALSE,
       'promote_default' => FALSE,
-      'sticky_enabled' => FALSE,
-      'sticky_default' => FALSE,
+      'sticky_enabled'  => FALSE,
+      'sticky_default'  => FALSE,
       'revision_enabled' => FALSE,
       'revision_default' => FALSE,
-      'node_preview' => FALSE,
+      'node_preview'    => FALSE,
     ),
   ));
   node_type_save($type);
@@ -338,9 +340,8 @@ function quiz_kit_uninstall() {
   node_type_delete('quiz_kit_quiz');
 
   // Delete the Quiz Categories vocabulary.
-  $vocab = taxonomy_vocabulary_machine_name_load('quiz_kit_categories');
-  if ($vocab) {
-    taxonomy_vocabulary_delete($vocab->vid);
+  if (taxonomy_vocabulary_machine_name_load('quiz_kit_categories')) {
+    taxonomy_vocabulary_delete('quiz_kit_categories');
   }
 
   // Remove any stored config/variables.

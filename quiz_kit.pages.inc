@@ -106,7 +106,7 @@ function quiz_kit_take_form_submit($form, &$form_state) {
   $correct = 0;
 
   foreach ($questions as $q) {
-    $given = isset($responses[$q->id]) ? $responses[$q->id] : NULL;
+    $given = isset($responses[$q->id]['answer']) ? $responses[$q->id]['answer'] : NULL;
     $is_correct = _quiz_kit_grade_answer($q, $given);
     if ($is_correct) {
       $correct++;

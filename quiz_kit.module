@@ -15,10 +15,10 @@ function quiz_kit_node_info() {
   return array(
     'quiz_kit_quiz' => array(
       'name' => t('Quiz'),
-      'base' => 'quiz_kit',
+      'base' => 'node_content',
       'description' => t('A quiz with one or more questions.'),
       'has_title' => TRUE,
-      'title_label' => t('Quiz title'),
+      'title_label' => t('Title'),
       'locked' => TRUE,
     ),
   );
@@ -76,8 +76,8 @@ function quiz_kit_menu() {
   // Question management tab on quiz nodes.
   $items['node/%node/questions'] = array(
     'title' => 'Questions',
-    'page callback' => 'quiz_kit_questions_page',
-    'page arguments' => array(1),
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => array('quiz_kit_questions_form', 1),
     'access callback' => 'quiz_kit_question_tab_access',
     'access arguments' => array(1),
     'type' => MENU_LOCAL_TASK,
@@ -175,6 +175,10 @@ function quiz_kit_menu() {
  */
 function quiz_kit_theme() {
   return array(
+    'quiz_kit_questions_table' => array(
+      'render element' => 'form',
+      'file' => 'quiz_kit.theme.inc',
+    ),
     'quiz_kit_take' => array(
       'template' => 'templates/quiz-kit-take',
       'variables' => array(
