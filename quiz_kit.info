@@ -1,0 +1,8 @@
+name = Quiz Kit
+description = Create and manage quizzes with multiple question types. Allows users to take quizzes and view their results.
+package = Quiz Kit
+type = module
+backdrop = 1.x
+version = 1.0.0
+
+configure = admin/config/quiz-kit

@@ -1,0 +1,350 @@
+<?php
+/**
+ * @file
+ * Install, update, and uninstall functions for Quiz Kit.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function quiz_kit_schema() {
+  $schema = array();
+
+  $schema['quiz_kit_question'] = array(
+    'description' => 'Stores quiz questions.',
+    'fields' => array(
+      'id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Primary key.',
+      ),
+      'nid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The {node}.nid of the quiz this question belongs to.',
+      ),
+      'vid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Current revision ID. Points to {quiz_kit_question_revision}.vid.',
+      ),
+      'type' => array(
+        'type' => 'varchar',
+        'length' => 64,
+        'not null' => TRUE,
+        'description' => 'Question type: mc_single, mc_multi, truefalse, short_text.',
+      ),
+      'weight' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Display order within the quiz.',
+      ),
+      'created' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Unix timestamp when the question was created.',
+      ),
+      'changed' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Unix timestamp when the question was last changed.',
+      ),
+    ),
+    'primary key' => array('id'),
+    'indexes' => array(
+      'nid' => array('nid'),
+    ),
+  );
+
+  $schema['quiz_kit_question_revision'] = array(
+    'description' => 'Revision history for quiz questions. Each edit creates a new row.',
+    'fields' => array(
+      'vid' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Revision primary key.',
+      ),
+      'id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The {quiz_kit_question}.id this revision belongs to.',
+      ),
+      'question_text' => array(
+        'type' => 'text',
+        'size' => 'medium',
+        'not null' => TRUE,
+        'description' => 'Question text at the time of this revision.',
+      ),
+      'created' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Unix timestamp when this revision was created.',
+      ),
+    ),
+    'primary key' => array('vid'),
+    'indexes' => array(
+      'id' => array('id'),
+    ),
+  );
+
+  $schema['quiz_kit_answer'] = array(
+    'description' => 'Stores answer options for quiz questions. Keyed to a question revision.',
+    'fields' => array(
+      'id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Primary key.',
+      ),
+      'question_vid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The {quiz_kit_question_revision}.vid this answer belongs to.',
+      ),
+      'answer_text' => array(
+        'type' => 'text',
+        'size' => 'medium',
+        'not null' => TRUE,
+        'description' => 'The answer option text.',
+      ),
+      'is_correct' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => '1 if this answer is correct.',
+      ),
+      'weight' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Display order among answers for this question.',
+      ),
+    ),
+    'primary key' => array('id'),
+    'indexes' => array(
+      'question_vid' => array('question_vid'),
+    ),
+  );
+
+  $schema['quiz_kit_result'] = array(
+    'description' => 'Stores one row per quiz attempt.',
+    'fields' => array(
+      'id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Primary key.',
+      ),
+      'nid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The {node}.nid of the quiz.',
+      ),
+      'uid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'The {users}.uid. 0 reserved for future anonymous support.',
+      ),
+      'score' => array(
+        'type' => 'float',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Score as a percentage (0–100).',
+      ),
+      'passed' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => '1 if the user met the pass threshold.',
+      ),
+      'started' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Unix timestamp when the attempt started.',
+      ),
+      'finished' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Unix timestamp when submitted. 0 if still in progress.',
+      ),
+    ),
+    'primary key' => array('id'),
+    'indexes' => array(
+      'nid_uid' => array('nid', 'uid'),
+    ),
+  );
+
+  $schema['quiz_kit_result_answer'] = array(
+    'description' => 'Stores individual answer submissions within a quiz attempt.',
+    'fields' => array(
+      'id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Primary key.',
+      ),
+      'result_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The {quiz_kit_result}.id this answer belongs to.',
+      ),
+      'question_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The {quiz_kit_question}.id.',
+      ),
+      'question_vid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The {quiz_kit_question_revision}.vid seen during this attempt.',
+      ),
+      'answer_given' => array(
+        'type' => 'text',
+        'description' => 'Serialized answer data: answer ID(s) for MC/TF, plain text for short_text.',
+      ),
+      'is_correct' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => '1 if the submitted answer was correct.',
+      ),
+    ),
+    'primary key' => array('id'),
+    'indexes' => array(
+      'result_id' => array('result_id'),
+    ),
+  );
+
+  return $schema;
+}
+
+/**
+ * Implements hook_install().
+ */
+function quiz_kit_install() {
+  // --- Node type ---
+  $type = node_type_set_defaults(array(
+    'type' => 'quiz_kit_quiz',
+    'name' => t('Quiz'),
+    'base' => 'quiz_kit',
+    'description' => t('A quiz with one or more questions.'),
+    'custom' => FALSE,
+    'modified' => FALSE,
+    'locked' => TRUE,
+    'is_new' => TRUE,
+    'settings' => array(
+      'status_default' => NODE_NOT_PUBLISHED,
+      'promote_enabled' => FALSE,
+      'promote_default' => FALSE,
+      'sticky_enabled' => FALSE,
+      'sticky_default' => FALSE,
+      'revision_enabled' => FALSE,
+      'revision_default' => FALSE,
+      'node_preview' => FALSE,
+    ),
+  ));
+  node_type_save($type);
+  node_add_body_field($type, t('Description'));
+
+  // --- Quiz Categories vocabulary ---
+  $vocab = new TaxonomyVocabulary(array(
+    'name' => t('Quiz Categories'),
+    'machine_name' => 'quiz_kit_categories',
+    'description' => t('Administrative categories for organising quizzes. Not shown to quiz-takers.'),
+  ));
+  taxonomy_vocabulary_save($vocab);
+
+  // --- Category field on the quiz node type ---
+  // Create the field if it does not already exist (another module may have
+  // created field_quiz_category on a previous install).
+  if (!field_info_field('field_quiz_category')) {
+    field_create_field(array(
+      'field_name' => 'field_quiz_category',
+      'type' => 'taxonomy_term_reference',
+      'cardinality' => 1,
+      'settings' => array(
+        'allowed_values' => array(
+          array(
+            'vocabulary' => 'quiz_kit_categories',
+            'parent' => 0,
+          ),
+        ),
+      ),
+    ));
+  }
+
+  field_create_instance(array(
+    'field_name' => 'field_quiz_category',
+    'entity_type' => 'node',
+    'bundle' => 'quiz_kit_quiz',
+    'label' => t('Category'),
+    'description' => t('Organise this quiz into an administrative category. Not visible to quiz-takers.'),
+    'required' => FALSE,
+    'widget' => array(
+      'type' => 'taxonomy_autocomplete',
+      'weight' => 10,
+    ),
+    'display' => array(
+      'default' => array(
+        'type' => 'hidden',
+        'label' => 'hidden',
+      ),
+    ),
+  ));
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function quiz_kit_uninstall() {
+  // Delete all quiz nodes.
+  $nids = db_query("SELECT nid FROM {node} WHERE type = 'quiz_kit_quiz'")->fetchCol();
+  if ($nids) {
+    node_delete_multiple($nids);
+  }
+
+  // Delete the field instance and field.
+  if ($instance = field_info_instance('node', 'field_quiz_category', 'quiz_kit_quiz')) {
+    field_delete_instance($instance);
+  }
+  if (field_info_field('field_quiz_category')) {
+    field_delete_field('field_quiz_category');
+  }
+  field_purge_batch(500);
+
+  // Delete the node type.
+  node_type_delete('quiz_kit_quiz');
+
+  // Delete the Quiz Categories vocabulary.
+  $vocab = taxonomy_vocabulary_machine_name_load('quiz_kit_categories');
+  if ($vocab) {
+    taxonomy_vocabulary_delete($vocab->vid);
+  }
+
+  // Remove any stored config/variables.
+  db_delete('variable')
+    ->condition('name', 'quiz_kit_%', 'LIKE')
+    ->execute();
+}

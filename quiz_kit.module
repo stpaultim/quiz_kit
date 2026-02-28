@@ -1,0 +1,269 @@
+<?php
+/**
+ * @file
+ * Quiz Kit — create and manage quizzes in Backdrop CMS.
+ */
+
+// ---------------------------------------------------------------------------
+// Node type
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_node_info().
+ */
+function quiz_kit_node_info() {
+  return array(
+    'quiz_kit_quiz' => array(
+      'name' => t('Quiz'),
+      'base' => 'quiz_kit',
+      'description' => t('A quiz with one or more questions.'),
+      'has_title' => TRUE,
+      'title_label' => t('Quiz title'),
+      'locked' => TRUE,
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Permissions
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_permission().
+ */
+function quiz_kit_permission() {
+  return array(
+    'administer quiz_kit' => array(
+      'title' => t('Administer Quiz Kit'),
+      'description' => t('Access Quiz Kit settings and view all results.'),
+      'restrict access' => TRUE,
+    ),
+    'take quizzes' => array(
+      'title' => t('Take quizzes'),
+      'description' => t('Attempt published quizzes and submit answers.'),
+    ),
+    'view own quiz results' => array(
+      'title' => t('View own quiz results'),
+      'description' => t('View personal quiz result history.'),
+    ),
+    'view any quiz results' => array(
+      'title' => t('View any quiz results'),
+      'description' => t('View result history for all users.'),
+      'restrict access' => TRUE,
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Menu
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_menu().
+ */
+function quiz_kit_menu() {
+  $items = array();
+
+  $items['admin/config/quiz-kit'] = array(
+    'title' => 'Quiz Kit',
+    'description' => 'Configure Quiz Kit global settings.',
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => array('quiz_kit_admin_settings_form'),
+    'access arguments' => array('administer quiz_kit'),
+    'file' => 'quiz_kit.admin.inc',
+  );
+
+  // Question management tab on quiz nodes.
+  $items['node/%node/questions'] = array(
+    'title' => 'Questions',
+    'page callback' => 'quiz_kit_questions_page',
+    'page arguments' => array(1),
+    'access callback' => 'quiz_kit_question_tab_access',
+    'access arguments' => array(1),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 5,
+    'file' => 'quiz_kit.admin.inc',
+  );
+
+  $items['node/%node/questions/add'] = array(
+    'title' => 'Add question',
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => array('quiz_kit_question_form', 1, NULL),
+    'access callback' => 'quiz_kit_question_tab_access',
+    'access arguments' => array(1),
+    'type' => MENU_LOCAL_ACTION,
+    'file' => 'quiz_kit.admin.inc',
+  );
+
+  $items['node/%node/questions/%quiz_kit_question/edit'] = array(
+    'title' => 'Edit question',
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => array('quiz_kit_question_form', 1, 3),
+    'access callback' => 'quiz_kit_question_tab_access',
+    'access arguments' => array(1),
+    'file' => 'quiz_kit.admin.inc',
+  );
+
+  $items['node/%node/questions/%quiz_kit_question/delete'] = array(
+    'title' => 'Delete question',
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => array('quiz_kit_question_delete_form', 1, 3),
+    'access callback' => 'quiz_kit_question_tab_access',
+    'access arguments' => array(1),
+    'file' => 'quiz_kit.admin.inc',
+  );
+
+  // User-facing quiz pages.
+  $items['quiz'] = array(
+    'title' => 'Quizzes',
+    'page callback' => 'quiz_kit_list_page',
+    'access arguments' => array('take quizzes'),
+    'file' => 'quiz_kit.pages.inc',
+  );
+
+  $items['node/%node/take'] = array(
+    'title' => 'Take quiz',
+    'page callback' => 'quiz_kit_take_page',
+    'page arguments' => array(1),
+    'access callback' => 'quiz_kit_take_access',
+    'access arguments' => array(1),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 10,
+    'file' => 'quiz_kit.pages.inc',
+  );
+
+  // Results pages.
+  $items['node/%node/results'] = array(
+    'title' => 'Results',
+    'page callback' => 'quiz_kit_results_list_page',
+    'page arguments' => array(1),
+    'access callback' => 'quiz_kit_results_list_access',
+    'access arguments' => array(1),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 11,
+    'file' => 'quiz_kit.pages.inc',
+  );
+
+  $items['node/%node/results/%quiz_kit_result'] = array(
+    'title' => 'Result detail',
+    'page callback' => 'quiz_kit_result_detail_page',
+    'page arguments' => array(1, 3),
+    'access callback' => 'quiz_kit_result_detail_access',
+    'access arguments' => array(1, 3),
+    'file' => 'quiz_kit.pages.inc',
+  );
+
+  $items['user/%user/quiz-results'] = array(
+    'title' => 'Quiz results',
+    'page callback' => 'quiz_kit_user_results_page',
+    'page arguments' => array(1),
+    'access callback' => 'quiz_kit_user_results_access',
+    'access arguments' => array(1),
+    'type' => MENU_LOCAL_TASK,
+    'file' => 'quiz_kit.pages.inc',
+  );
+
+  return $items;
+}
+
+// ---------------------------------------------------------------------------
+// Theme
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_theme().
+ */
+function quiz_kit_theme() {
+  return array(
+    'quiz_kit_take' => array(
+      'template' => 'templates/quiz-kit-take',
+      'variables' => array(
+        'node' => NULL,
+        'form' => NULL,
+        'progress' => NULL,
+        'time_limit' => 0,
+      ),
+    ),
+    'quiz_kit_results' => array(
+      'template' => 'templates/quiz-kit-results',
+      'variables' => array(
+        'node' => NULL,
+        'result' => NULL,
+        'answers' => array(),
+        'show_correct' => TRUE,
+      ),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Access callbacks
+// ---------------------------------------------------------------------------
+
+/**
+ * Access callback: Questions tab — node must be a quiz and user must be able
+ * to edit it.
+ */
+function quiz_kit_question_tab_access($node) {
+  return $node->type === 'quiz_kit_quiz' && node_access('update', $node);
+}
+
+/**
+ * Access callback: Take quiz tab — node must be a published quiz.
+ */
+function quiz_kit_take_access($node) {
+  return $node->type === 'quiz_kit_quiz'
+    && $node->status
+    && user_access('take quizzes');
+}
+
+/**
+ * Access callback: Results list — quiz authors and admins.
+ */
+function quiz_kit_results_list_access($node) {
+  return $node->type === 'quiz_kit_quiz'
+    && (user_access('view any quiz results') || node_access('update', $node));
+}
+
+/**
+ * Access callback: Single result detail.
+ */
+function quiz_kit_result_detail_access($node, $result) {
+  if ($node->type !== 'quiz_kit_quiz') {
+    return FALSE;
+  }
+  if (user_access('view any quiz results')) {
+    return TRUE;
+  }
+  global $user;
+  return user_access('view own quiz results') && (int) $result->uid === (int) $user->uid;
+}
+
+/**
+ * Access callback: User's own result history tab.
+ */
+function quiz_kit_user_results_access($account) {
+  if (user_access('view any quiz results')) {
+    return TRUE;
+  }
+  global $user;
+  return user_access('view own quiz results') && (int) $account->uid === (int) $user->uid;
+}
+
+// ---------------------------------------------------------------------------
+// Wildcard loaders
+// ---------------------------------------------------------------------------
+
+/**
+ * Menu wildcard loader: %quiz_kit_question.
+ */
+function quiz_kit_question_load($id) {
+  return db_query('SELECT * FROM {quiz_kit_question} WHERE id = :id', array(':id' => $id))->fetchObject();
+}
+
+/**
+ * Menu wildcard loader: %quiz_kit_result.
+ */
+function quiz_kit_result_load($id) {
+  return db_query('SELECT * FROM {quiz_kit_result} WHERE id = :id', array(':id' => $id))->fetchObject();
+}
