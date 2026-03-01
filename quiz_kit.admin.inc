@@ -521,6 +521,21 @@ function quiz_kit_question_form($form, &$form_state, $node, $question = NULL) {
     )),
   );
 
+  // --- Answer layout (only relevant for types that have multiple choices) ---
+  if (in_array($type, array('mc_single', 'mc_any', 'mc_multi', 'truefalse'))) {
+    $layout_default = 'horizontal';
+    if ($question && isset($question->answer_layout)) {
+      $layout_default = $question->answer_layout;
+    }
+    $form['answer_layout'] = array(
+      '#type'          => 'radios',
+      '#title'         => t('Answer display'),
+      '#options'       => array('horizontal' => t('Horizontal'), 'vertical' => t('Vertical')),
+      '#default_value' => $layout_default,
+      '#description'   => t('How answer choices are displayed to quiz-takers.'),
+    );
+  }
+
   // --- Question text ---
   $form['question_text'] = array(
     '#type' => 'textarea',
@@ -530,7 +545,19 @@ function quiz_kit_question_form($form, &$form_state, $node, $question = NULL) {
     '#rows' => 3,
   );
 
-  $form['#attached']['css'][] = backdrop_get_path('module', 'quiz_kit') . '/quiz_kit.admin.css';
+  // --- Include in score ---
+  $scored_default = ($type === 'long_text') ? 0 : 1;
+  if ($question && isset($question->scored)) {
+    $scored_default = (int) $question->scored;
+  }
+  $form['scored'] = array(
+    '#type'          => 'checkbox',
+    '#title'         => t('Include in score'),
+    '#default_value' => $scored_default,
+    '#description'   => t('Uncheck for metadata questions (e.g. Name, Class) whose responses should be recorded but not counted toward the score.'),
+  );
+
+  $form['#attached']['css'][] = backdrop_get_path('module', 'quiz_kit') . '/css/quiz_kit.admin.css';
 
   // --- Answers (AJAX-replaceable container) ---
   $form['answers'] = array(
@@ -600,7 +627,12 @@ function quiz_kit_question_form_submit($form, &$form_state) {
   $values    = $form_state['values'];
   $now       = REQUEST_TIME;
   $type      = $question ? $question->type : $values['type'];
-  $section_id = isset($values['section_id']) ? (int) $values['section_id'] : 0;
+  $section_id    = isset($values['section_id'])    ? (int) $values['section_id']   : 0;
+  $scored        = isset($values['scored'])        ? (int) $values['scored']       : 1;
+  $answer_layout = isset($values['answer_layout']) ? $values['answer_layout']      : 'horizontal';
+  if (!in_array($answer_layout, array('horizontal', 'vertical'))) {
+    $answer_layout = 'horizontal';
+  }
 
   if ($question) {
     // New revision of an existing question.
@@ -613,7 +645,7 @@ function quiz_kit_question_form_submit($form, &$form_state) {
       ->execute();
 
     db_update('quiz_kit_question')
-      ->fields(array('vid' => $vid, 'changed' => $now))
+      ->fields(array('vid' => $vid, 'changed' => $now, 'answer_layout' => $answer_layout, 'scored' => $scored))
       ->condition('id', $question->id)
       ->execute();
 
@@ -629,10 +661,12 @@ function quiz_kit_question_form_submit($form, &$form_state) {
     // New question: insert into bank, then create the junction record.
     $qid = db_insert('quiz_kit_question')
       ->fields(array(
-        'vid'     => 0,
-        'type'    => $type,
-        'created' => $now,
-        'changed' => $now,
+        'vid'           => 0,
+        'type'          => $type,
+        'created'       => $now,
+        'changed'       => $now,
+        'answer_layout' => $answer_layout,
+        'scored'        => $scored,
       ))
       ->execute();
 
@@ -695,6 +729,10 @@ function _quiz_kit_build_answer_ui(&$form, &$form_state, $type, $existing_answer
 
     case 'short_text':
       _quiz_kit_build_short_text_ui($form, $form_state, $existing_answers);
+      break;
+
+    case 'long_text':
+      _quiz_kit_build_long_text_ui($form, $form_state);
       break;
   }
 }
@@ -846,6 +884,18 @@ function _quiz_kit_build_short_text_ui(&$form, &$form_state, $existing_answers) 
   );
 }
 
+/**
+ * Answer UI for long text (open response) questions.
+ *
+ * No correct answer is defined — respondents see a textarea and their
+ * response is recorded but not graded.
+ */
+function _quiz_kit_build_long_text_ui(&$form, &$form_state) {
+  $form['answers']['note'] = array(
+    '#markup' => '<p class="description">' . t('Respondents will see a text area for their open-ended response. No correct answer is defined and this question does not affect the score.') . '</p>',
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Answer UI AJAX handlers
 // ---------------------------------------------------------------------------
@@ -958,6 +1008,10 @@ function _quiz_kit_save_answers($vid, $type, $answers) {
           'weight'       => 0,
         ))
         ->execute();
+      break;
+
+    case 'long_text':
+      // No answer records — open response, not graded.
       break;
   }
 }
@@ -1120,6 +1174,7 @@ function quiz_kit_question_type_options() {
     'mc_multi'   => t('Multiple choice — all correct answers required'),
     'truefalse'  => t('True / False'),
     'short_text' => t('Short text (exact match)'),
+    'long_text'  => t('Long text (open response, not scored)'),
   );
 }
 

@@ -46,6 +46,15 @@ function quiz_kit_take_page($node) {
     }
   }
 
+  // Warn editors previewing an unpublished quiz.
+  if (!$node->status && node_access('update', $node)) {
+    backdrop_set_message(
+      t('This quiz is unpublished. You are previewing it as an editor. <a href="@url">Publish it</a> when you are ready for others to take it.',
+        array('@url' => url('node/' . $node->nid . '/edit'))),
+      'warning'
+    );
+  }
+
   // Load questions.
   $questions = _quiz_kit_load_questions($node->nid);
   if (empty($questions)) {
@@ -211,7 +220,7 @@ function quiz_kit_take_form_submit($form, &$form_state) {
   }
 
   $all_qs    = _quiz_kit_load_questions($node->nid);
-  $total     = count($all_qs);
+  $total     = 0;
   $correct   = 0;
   $grade_map = array();
 
@@ -219,8 +228,11 @@ function quiz_kit_take_form_submit($form, &$form_state) {
     $given      = isset($responses[$q->id]['answer']) ? $responses[$q->id]['answer'] : NULL;
     $is_correct = _quiz_kit_grade_answer($q, $given);
     $grade_map[$q->id] = $is_correct;
-    if ($is_correct) {
-      $correct++;
+    if ((int) $q->scored) {
+      $total++;
+      if ($is_correct) {
+        $correct++;
+      }
     }
 
     db_insert('quiz_kit_result_answer')
@@ -296,7 +308,7 @@ function quiz_kit_results_list_page($node) {
 function quiz_kit_result_detail_page($node, $result) {
   // Include question type so we can decode answer_given correctly.
   $answers = db_query(
-    'SELECT ra.*, r.question_text, q.type
+    'SELECT ra.*, r.question_text, q.type, q.scored
      FROM {quiz_kit_result_answer} ra
      JOIN {quiz_kit_question_revision} r ON r.vid = ra.question_vid
      JOIN {quiz_kit_question} q ON q.id = ra.question_id
@@ -374,6 +386,7 @@ function _quiz_kit_decode_answer_given($type, $answer_given) {
       return implode(', ', $texts);
 
     case 'short_text':
+    case 'long_text':
     default:
       return ($answer_given !== '') ? $answer_given : t('(no answer)');
   }
@@ -419,7 +432,7 @@ function quiz_kit_user_results_page($account) {
  */
 function _quiz_kit_load_questions($nid) {
   return db_query(
-    'SELECT q.id, q.vid, q.type, qq.section_id, qq.weight
+    'SELECT q.id, q.vid, q.type, q.answer_layout, q.scored, qq.section_id, qq.weight
      FROM {quiz_kit_question} q
      JOIN {quiz_kit_quiz_question} qq ON qq.question_id = q.id
      WHERE qq.nid = :nid
@@ -550,7 +563,7 @@ function _quiz_kit_save_section_scores($result_id, $all_qs, $grade_map) {
   $by_section = array();
   foreach ($all_qs as $q) {
     $sid = (int) $q->section_id;
-    if ($sid > 0) {
+    if ($sid > 0 && (int) $q->scored) {
       $by_section[$sid][] = $q;
     }
   }
@@ -583,11 +596,13 @@ function _quiz_kit_save_section_scores($result_id, $all_qs, $grade_map) {
  * @param bool   $required  Whether the question must be answered before submit.
  */
 function _quiz_kit_question_element($question, $answers, $required = TRUE) {
-  $text = db_query('SELECT question_text FROM {quiz_kit_question_revision} WHERE vid = :vid', array(':vid' => $question->vid))->fetchField();
+  $text   = db_query('SELECT question_text FROM {quiz_kit_question_revision} WHERE vid = :vid', array(':vid' => $question->vid))->fetchField();
+  $layout = (isset($question->answer_layout) && $question->answer_layout === 'vertical') ? 'vertical' : 'horizontal';
 
   $element = array(
-    '#type'  => 'fieldset',
-    '#title' => check_plain($text),
+    '#type'       => 'fieldset',
+    '#title'      => check_plain($text),
+    '#attributes' => array('class' => array('quiz-kit-question', 'quiz-kit-layout-' . $layout)),
   );
 
   switch ($question->type) {
@@ -624,6 +639,15 @@ function _quiz_kit_question_element($question, $answers, $required = TRUE) {
         '#type'     => 'textfield',
         '#title'    => t('Your answer'),
         '#required' => $required,
+      );
+      break;
+
+    case 'long_text':
+      $element['answer'] = array(
+        '#type'     => 'textarea',
+        '#title'    => t('Your response'),
+        '#required' => $required,
+        '#rows'     => 4,
       );
       break;
   }
@@ -667,6 +691,9 @@ function _quiz_kit_grade_answer($question, $given) {
         array(':vid' => $question->vid)
       )->fetchField();
       return mb_strtolower(trim((string) $given)) === mb_strtolower(trim((string) $correct));
+
+    case 'long_text':
+      return FALSE; // Unscored; grading loop checks $q->scored before counting.
   }
 
   return FALSE;

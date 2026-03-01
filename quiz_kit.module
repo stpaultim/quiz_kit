@@ -238,7 +238,11 @@ function quiz_kit_node_view($node, $view_mode, $langcode) {
   if ($node->type !== 'quiz_kit_quiz' || $view_mode !== 'full') {
     return;
   }
-  if (!user_access('take quizzes') || !$node->status) {
+  $is_editor = node_access('update', $node);
+  if (!$node->status && !$is_editor) {
+    return;
+  }
+  if ($node->status && !user_access('take quizzes')) {
     return;
   }
 
@@ -272,7 +276,7 @@ function quiz_kit_node_view($node, $view_mode, $langcode) {
   }
 
   $pass_rate = (int) _quiz_kit_node_setting($node, 'pass_rate', 75);
-  $meta[]    = t('Pass rate: @rate%', array('@rate' => $pass_rate));
+  $meta[]    = t('Required to pass: @rate%', array('@rate' => $pass_rate));
 
   $time_limit = (int) _quiz_kit_node_setting($node, 'time_limit', 0);
   if ($time_limit > 0) {
@@ -369,12 +373,18 @@ function quiz_kit_question_tab_access($node) {
 }
 
 /**
- * Access callback: Take quiz tab — node must be a published quiz.
+ * Access callback: Take quiz tab — published quiz for regular users;
+ * unpublished quiz also allowed for editors (for preview purposes).
  */
 function quiz_kit_take_access($node) {
-  return $node->type === 'quiz_kit_quiz'
-    && $node->status
-    && user_access('take quizzes');
+  if ($node->type !== 'quiz_kit_quiz') {
+    return FALSE;
+  }
+  if ($node->status && user_access('take quizzes')) {
+    return TRUE;
+  }
+  // Allow editors to preview an unpublished quiz.
+  return node_access('update', $node);
 }
 
 /**

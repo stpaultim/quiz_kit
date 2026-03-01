@@ -177,3 +177,46 @@
 .quiz-kit-section-score-title {
   color: #555;
 }
+
+/* Results table row highlighting */
+tr.quiz-kit-incorrect {
+  background-color: #fff5f5;
+  color: #7a0000;
+}
+
+tr.quiz-kit-not-scored {
+  color: #888;
+}
+
+em.quiz-kit-correct-answer {
+    color: black;
+}
+
+/* Question fieldset */
+.quiz-kit-question {
+  border: none;
+  background: #f5f5f5;
+}
+
+/* Horizontal answer layout */
+.quiz-kit-layout-horizontal .form-radios,
+.quiz-kit-layout-horizontal .form-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25em 1.5em;
+}
+
+.quiz-kit-layout-horizontal .form-type-radio,
+.quiz-kit-layout-horizontal .form-type-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  white-space: nowrap;
+  margin: 0;
+}
+
+.quiz-kit-layout-horizontal .form-type-radio label,
+.quiz-kit-layout-horizontal .form-type-checkbox label {
+  margin: 0;
+}

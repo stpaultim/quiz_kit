@@ -5,4 +5,6 @@ type = module
 backdrop = 1.x
 version = 1.0.0
 
+stylesheets[all][] = css/quiz_kit.css
+
 configure = admin/config/quiz-kit

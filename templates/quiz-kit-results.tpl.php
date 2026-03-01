@@ -57,16 +57,27 @@
         </thead>
         <tbody>
           <?php $n = 1; foreach ($answers as $a): ?>
-          <tr class="<?php print $a->is_correct ? 'quiz-kit-correct' : 'quiz-kit-incorrect'; ?>">
+          <?php
+            if (!$a->scored):
+              $row_class = 'quiz-kit-not-scored';
+            elseif ($a->is_correct):
+              $row_class = 'quiz-kit-correct';
+            else:
+              $row_class = 'quiz-kit-incorrect';
+            endif;
+          ?>
+          <tr class="<?php print $row_class; ?>">
             <td><?php print $n . '. ' . check_plain($a->question_text); ?></td>
             <td>
               <?php print check_plain($a->answer_display); ?>
-              <?php if (!$a->is_correct && !empty($a->correct_answer_display)): ?>
+              <?php if ($a->scored && !$a->is_correct && !empty($a->correct_answer_display)): ?>
                 <br><em class="quiz-kit-correct-answer"><?php print t('Correct: @answer', array('@answer' => check_plain($a->correct_answer_display))); ?></em>
               <?php endif; ?>
             </td>
             <td class="quiz-kit-status">
-              <?php if ($a->is_correct): ?>
+              <?php if (!$a->scored): ?>
+                <span class="quiz-kit-not-scored-label"><?php print t('—'); ?></span>
+              <?php elseif ($a->is_correct): ?>
                 <span class="quiz-kit-correct-label"><?php print t('Correct'); ?></span>
               <?php else: ?>
                 <span class="quiz-kit-incorrect-label"><?php print t('Incorrect'); ?></span>
