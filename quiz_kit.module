@@ -73,6 +73,46 @@ function quiz_kit_menu() {
     'file' => 'quiz_kit.admin.inc',
   );
 
+  // Sections management tab on quiz nodes.
+  $items['node/%node/sections'] = array(
+    'title' => 'Sections',
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => array('quiz_kit_sections_form', 1),
+    'access callback' => 'quiz_kit_question_tab_access',
+    'access arguments' => array(1),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 4,
+    'file' => 'quiz_kit.admin.inc',
+  );
+
+  $items['node/%node/sections/add'] = array(
+    'title' => 'Add section',
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => array('quiz_kit_section_form', 1, NULL),
+    'access callback' => 'quiz_kit_question_tab_access',
+    'access arguments' => array(1),
+    'type' => MENU_LOCAL_ACTION,
+    'file' => 'quiz_kit.admin.inc',
+  );
+
+  $items['node/%node/sections/%quiz_kit_section/edit'] = array(
+    'title' => 'Edit section',
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => array('quiz_kit_section_form', 1, 3),
+    'access callback' => 'quiz_kit_question_tab_access',
+    'access arguments' => array(1),
+    'file' => 'quiz_kit.admin.inc',
+  );
+
+  $items['node/%node/sections/%quiz_kit_section/delete'] = array(
+    'title' => 'Delete section',
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => array('quiz_kit_section_delete_form', 1, 3),
+    'access callback' => 'quiz_kit_question_tab_access',
+    'access arguments' => array(1),
+    'file' => 'quiz_kit.admin.inc',
+  );
+
   // Question management tab on quiz nodes.
   $items['node/%node/questions'] = array(
     'title' => 'Questions',
@@ -127,8 +167,7 @@ function quiz_kit_menu() {
     'page arguments' => array(1),
     'access callback' => 'quiz_kit_take_access',
     'access arguments' => array(1),
-    'type' => MENU_LOCAL_TASK,
-    'weight' => 10,
+    'type' => MENU_CALLBACK,
     'file' => 'quiz_kit.pages.inc',
   );
 
@@ -167,6 +206,99 @@ function quiz_kit_menu() {
 }
 
 // ---------------------------------------------------------------------------
+// Node view
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_node_view().
+ *
+ * Adds a quiz intro block to the full node view: metadata (question count,
+ * pass rate, time limit, remaining attempts) and a prominent "Take Quiz"
+ * button. Replaces the "Take quiz" local task tab for end-users.
+ */
+function quiz_kit_node_view($node, $view_mode, $langcode) {
+  if ($node->type !== 'quiz_kit_quiz' || $view_mode !== 'full') {
+    return;
+  }
+  if (!user_access('take quizzes') || !$node->status) {
+    return;
+  }
+
+  module_load_include('inc', 'quiz_kit', 'quiz_kit.pages');
+
+  global $user;
+
+  // Determine whether the user still has attempts available.
+  $max           = (int) _quiz_kit_node_setting($node, 'max_attempts', 0);
+  $attempts_used = 0;
+  $can_take      = TRUE;
+  if ($max > 0) {
+    $attempts_used = (int) db_query(
+      'SELECT COUNT(*) FROM {quiz_kit_result} WHERE nid = :nid AND uid = :uid AND finished > 0',
+      array(':nid' => $node->nid, ':uid' => $user->uid)
+    )->fetchField();
+    if ($attempts_used >= $max) {
+      $can_take = FALSE;
+    }
+  }
+
+  // Build metadata list.
+  $meta = array();
+
+  $question_count = (int) db_query(
+    'SELECT COUNT(*) FROM {quiz_kit_question} WHERE nid = :nid',
+    array(':nid' => $node->nid)
+  )->fetchField();
+  if ($question_count > 0) {
+    $meta[] = format_plural($question_count, '1 question', '@count questions');
+  }
+
+  $pass_rate = (int) _quiz_kit_node_setting($node, 'pass_rate', 75);
+  $meta[]    = t('Pass rate: @rate%', array('@rate' => $pass_rate));
+
+  $time_limit = (int) _quiz_kit_node_setting($node, 'time_limit', 0);
+  if ($time_limit > 0) {
+    $meta[] = t('Time limit: @mins minutes', array('@mins' => $time_limit));
+  }
+
+  if ($max > 0) {
+    $remaining = $max - $attempts_used;
+    $meta[] = format_plural($remaining, '1 attempt remaining', '@count attempts remaining');
+  }
+
+  // Render the intro block.
+  $output = '<div class="quiz-kit-node-intro">';
+
+  if (!empty($meta)) {
+    $output .= '<ul class="quiz-kit-meta">';
+    foreach ($meta as $item) {
+      $output .= '<li>' . $item . '</li>';
+    }
+    $output .= '</ul>';
+  }
+
+  if ($can_take) {
+    $output .= '<p>' . l(
+      t('Take Quiz'),
+      'node/' . $node->nid . '/take',
+      array('attributes' => array('class' => array('quiz-kit-take-button')))
+    ) . '</p>';
+  }
+  else {
+    $output .= '<p class="quiz-kit-attempts-exhausted">'
+      . t('You have used all of your attempts for this quiz.')
+      . '</p>';
+  }
+
+  $output .= '</div>';
+
+  $node->content['quiz_kit_intro'] = array(
+    '#markup' => $output,
+    '#weight' => 10,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Theme
 // ---------------------------------------------------------------------------
 
@@ -175,6 +307,10 @@ function quiz_kit_menu() {
  */
 function quiz_kit_theme() {
   return array(
+    'quiz_kit_sections_table' => array(
+      'render element' => 'form',
+      'file' => 'quiz_kit.theme.inc',
+    ),
     'quiz_kit_questions_table' => array(
       'render element' => 'form',
       'file' => 'quiz_kit.theme.inc',
@@ -195,6 +331,8 @@ function quiz_kit_theme() {
         'result' => NULL,
         'answers' => array(),
         'show_correct' => TRUE,
+        'section_scores' => array(),
+        'show_section_scores' => FALSE,
       ),
     ),
   );
@@ -270,4 +408,11 @@ function quiz_kit_question_load($id) {
  */
 function quiz_kit_result_load($id) {
   return db_query('SELECT * FROM {quiz_kit_result} WHERE id = :id', array(':id' => $id))->fetchObject();
+}
+
+/**
+ * Menu wildcard loader: %quiz_kit_section.
+ */
+function quiz_kit_section_load($id) {
+  return db_query('SELECT * FROM {quiz_kit_section} WHERE id = :id', array(':id' => $id))->fetchObject();
 }

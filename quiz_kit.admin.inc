@@ -1,7 +1,7 @@
 <?php
 /**
  * @file
- * Admin pages: global settings, question management UI.
+ * Admin pages: global settings, section management, question management UI.
  */
 
 // ---------------------------------------------------------------------------
@@ -53,21 +53,255 @@ function quiz_kit_admin_settings_form_submit($form, &$form_state) {
 }
 
 // ---------------------------------------------------------------------------
+// Section list / ordering form
+// ---------------------------------------------------------------------------
+
+/**
+ * Form: list sections for a quiz with tabledrag reordering.
+ */
+function quiz_kit_sections_form($form, &$form_state, $node) {
+  $form_state['quiz_node'] = $node;
+
+  $sections = db_query(
+    'SELECT * FROM {quiz_kit_section} WHERE nid = :nid ORDER BY weight, id',
+    array(':nid' => $node->nid)
+  )->fetchAll();
+
+  if (empty($sections)) {
+    $form['empty'] = array(
+      '#markup' => t('No sections yet. <a href="@url">Add the first section.</a>', array(
+        '@url' => url('node/' . $node->nid . '/sections/add'),
+      )),
+    );
+    return $form;
+  }
+
+  $delta = count($sections);
+
+  $form['sections'] = array(
+    '#tree'  => TRUE,
+    '#theme' => 'quiz_kit_sections_table',
+    '#node'  => $node,
+  );
+
+  foreach ($sections as $s) {
+    $form['sections'][$s->id] = array(
+      'title' => array(
+        '#markup' => check_plain($s->title),
+      ),
+      'page_break' => array(
+        '#markup' => $s->page_break ? t('Yes') : t('No'),
+      ),
+      'weight' => array(
+        '#type'          => 'weight',
+        '#title'         => t('Weight'),
+        '#title_display' => 'invisible',
+        '#default_value' => $s->weight,
+        '#delta'         => $delta,
+        '#attributes'    => array('class' => array('quiz-kit-section-weight')),
+      ),
+      'ops' => array(
+        '#markup' => implode(' | ', array(
+          l(t('Edit'), 'node/' . $node->nid . '/sections/' . $s->id . '/edit'),
+          l(t('Delete'), 'node/' . $node->nid . '/sections/' . $s->id . '/delete'),
+        )),
+      ),
+    );
+  }
+
+  $form['actions']['#type'] = 'actions';
+  $form['actions']['submit'] = array(
+    '#type'  => 'submit',
+    '#value' => t('Save order'),
+  );
+
+  return $form;
+}
+
+/**
+ * Submit: save the reordered section weights.
+ */
+function quiz_kit_sections_form_submit($form, &$form_state) {
+  foreach ($form_state['values']['sections'] as $sid => $values) {
+    db_update('quiz_kit_section')
+      ->fields(array('weight' => (int) $values['weight']))
+      ->condition('id', $sid)
+      ->execute();
+  }
+  backdrop_set_message(t('Section order saved.'));
+}
+
+// ---------------------------------------------------------------------------
+// Section add/edit form
+// ---------------------------------------------------------------------------
+
+/**
+ * Form: add or edit a section.
+ *
+ * @param object      $node     The quiz node.
+ * @param object|null $section  Existing section for edits; NULL for new.
+ */
+function quiz_kit_section_form($form, &$form_state, $node, $section = NULL) {
+  $form_state['quiz_node'] = $node;
+  $form_state['section']   = $section;
+
+  $form['title'] = array(
+    '#type'          => 'textfield',
+    '#title'         => t('Section title'),
+    '#default_value' => $section ? $section->title : '',
+    '#required'      => TRUE,
+    '#maxlength'     => 255,
+  );
+
+  $form['instructions'] = array(
+    '#type'          => 'textarea',
+    '#title'         => t('Instructions'),
+    '#default_value' => $section ? $section->instructions : '',
+    '#required'      => FALSE,
+    '#rows'          => 4,
+    '#description'   => t('Optional text shown to quiz-takers at the top of this section.'),
+  );
+
+  $form['page_break'] = array(
+    '#type'          => 'checkbox',
+    '#title'         => t('Start a new page before this section'),
+    '#default_value' => $section ? (int) $section->page_break : 0,
+    '#description'   => t('When checked, quiz-takers will see a Next button and this section will appear on its own page. Has no effect on the first section that contains questions.'),
+  );
+
+  $form['actions']['#type'] = 'actions';
+  $form['actions']['submit'] = array(
+    '#type'  => 'submit',
+    '#value' => $section ? t('Save section') : t('Add section'),
+  );
+  $form['actions']['cancel'] = array(
+    '#markup' => l(t('Cancel'), 'node/' . $node->nid . '/sections'),
+  );
+
+  return $form;
+}
+
+/**
+ * Submit: section add/edit form.
+ */
+function quiz_kit_section_form_submit($form, &$form_state) {
+  $node    = $form_state['quiz_node'];
+  $section = $form_state['section'];
+  $values  = $form_state['values'];
+
+  if ($section) {
+    db_update('quiz_kit_section')
+      ->fields(array(
+        'title'        => $values['title'],
+        'instructions' => $values['instructions'],
+        'page_break'   => (int) $values['page_break'],
+      ))
+      ->condition('id', $section->id)
+      ->execute();
+    backdrop_set_message(t('Section updated.'));
+  }
+  else {
+    $next_weight = (int) db_query(
+      'SELECT COUNT(*) FROM {quiz_kit_section} WHERE nid = :nid',
+      array(':nid' => $node->nid)
+    )->fetchField();
+
+    db_insert('quiz_kit_section')
+      ->fields(array(
+        'nid'          => $node->nid,
+        'title'        => $values['title'],
+        'instructions' => $values['instructions'],
+        'weight'       => $next_weight,
+        'page_break'   => (int) $values['page_break'],
+      ))
+      ->execute();
+    backdrop_set_message(t('Section added.'));
+  }
+
+  $form_state['redirect'] = 'node/' . $node->nid . '/sections';
+}
+
+// ---------------------------------------------------------------------------
+// Section delete form
+// ---------------------------------------------------------------------------
+
+/**
+ * Form: confirm section deletion.
+ */
+function quiz_kit_section_delete_form($form, &$form_state, $node, $section) {
+  $form_state['quiz_node'] = $node;
+  $form_state['section']   = $section;
+
+  return confirm_form(
+    $form,
+    t('Are you sure you want to delete the section %title?', array('%title' => $section->title)),
+    'node/' . $node->nid . '/sections',
+    t('All questions currently assigned to this section will be moved to "no section". Section score history will also be removed.'),
+    t('Delete'),
+    t('Cancel')
+  );
+}
+
+/**
+ * Submit: section delete confirm form.
+ */
+function quiz_kit_section_delete_form_submit($form, &$form_state) {
+  $section = $form_state['section'];
+  $node    = $form_state['quiz_node'];
+
+  // Unassign questions from this section.
+  db_update('quiz_kit_question')
+    ->fields(array('section_id' => 0))
+    ->condition('section_id', $section->id)
+    ->execute();
+
+  // Delete per-section result history.
+  db_delete('quiz_kit_result_section')
+    ->condition('section_id', $section->id)
+    ->execute();
+
+  // Delete the section record.
+  db_delete('quiz_kit_section')
+    ->condition('id', $section->id)
+    ->execute();
+
+  backdrop_set_message(t('Section %title deleted.', array('%title' => $section->title)));
+  $form_state['redirect'] = 'node/' . $node->nid . '/sections';
+}
+
+// ---------------------------------------------------------------------------
 // Question list / ordering form
 // ---------------------------------------------------------------------------
 
 /**
- * Form: list questions for a quiz with tabledrag reordering.
+ * Form: list questions for a quiz grouped by section with tabledrag reordering.
+ *
+ * Questions are displayed under their assigned section heading. Drag handles
+ * allow within-section reordering. Section assignment is changed on the
+ * question add/edit form, not here.
  */
 function quiz_kit_questions_form($form, &$form_state, $node) {
   $form_state['quiz_node'] = $node;
 
+  // Load sections in display order.
+  $sections = db_query(
+    'SELECT * FROM {quiz_kit_section} WHERE nid = :nid ORDER BY weight, id',
+    array(':nid' => $node->nid)
+  )->fetchAllAssoc('id');
+
+  // Load questions ordered by section weight first, then question weight,
+  // so the initial table order matches the quiz display order.
   $questions = db_query(
-    'SELECT q.id, q.weight, q.type, r.question_text
+    'SELECT q.id, q.weight, q.type, q.section_id, r.question_text
      FROM {quiz_kit_question} q
      JOIN {quiz_kit_question_revision} r ON r.vid = q.vid
+     LEFT JOIN {quiz_kit_section} s ON s.id = q.section_id
      WHERE q.nid = :nid
-     ORDER BY q.weight, q.id',
+     ORDER BY
+       CASE WHEN q.section_id = 0 THEN -1 ELSE COALESCE(s.weight, 0) END,
+       COALESCE(s.id, 0),
+       q.weight,
+       q.id',
     array(':nid' => $node->nid)
   )->fetchAll();
 
@@ -81,7 +315,7 @@ function quiz_kit_questions_form($form, &$form_state, $node) {
   }
 
   $type_labels = quiz_kit_question_type_options();
-  $delta = count($questions);
+  $delta       = count($questions);
 
   $form['questions'] = array(
     '#tree'  => TRUE,
@@ -89,7 +323,36 @@ function quiz_kit_questions_form($form, &$form_state, $node) {
     '#node'  => $node,
   );
 
+  // Walk questions in section order, injecting a header row each time the
+  // section changes. Section header entries are plain containers with no
+  // form inputs so they never appear in $form_state['values'].
+  $last_section_id = -1;
+
   foreach ($questions as $q) {
+    $sid = (int) $q->section_id;
+
+    if ($sid !== $last_section_id) {
+      if ($sid === 0) {
+        $label = t('(No section)');
+      }
+      elseif (isset($sections[$sid])) {
+        $sec   = $sections[$sid];
+        $label = check_plain($sec->title);
+        if ($sec->page_break) {
+          $label .= ' — ' . t('page break');
+        }
+      }
+      else {
+        $label = t('Unknown section');
+      }
+
+      $form['questions']['section_header_' . $sid] = array(
+        '#is_section_header' => TRUE,
+        '#section_label'     => $label,
+      );
+      $last_section_id = $sid;
+    }
+
     $form['questions'][$q->id] = array(
       'question_text' => array(
         '#markup' => check_plain($q->question_text),
@@ -125,6 +388,8 @@ function quiz_kit_questions_form($form, &$form_state, $node) {
 
 /**
  * Submit: save the reordered question weights.
+ *
+ * Section assignment is not changed here — edit the question to reassign it.
  */
 function quiz_kit_questions_form_submit($form, &$form_state) {
   foreach ($form_state['values']['questions'] as $qid => $values) {
@@ -185,20 +450,23 @@ function quiz_kit_question_form($form, &$form_state, $node, $question = NULL) {
   // Load existing answers (edit mode only).
   $existing_answers = $question ? _quiz_kit_load_answers_for_vid($question->vid) : array();
 
-  // Reset the answer row count if the type changed since the last build.
+  // Reset answer slots if the type changed since the last build.
   if (isset($form_state['prev_question_type']) && $form_state['prev_question_type'] !== $type) {
-    unset($form_state['answer_count']);
+    unset($form_state['answer_slots']);
   }
   $form_state['prev_question_type'] = $type;
 
-  // Initialise the answer row count once per type.
-  if (!isset($form_state['answer_count'])) {
+  // Initialise answer slots once per type. Each slot is an integer ID that
+  // remains stable across AJAX rebuilds even when rows are removed.
+  if (!isset($form_state['answer_slots'])) {
     if ($existing_answers) {
-      $form_state['answer_count'] = count($existing_answers);
+      $form_state['answer_slots'] = range(0, count($existing_answers) - 1);
     }
     else {
-      $default = config_get('quiz_kit.settings', 'default_answer_count') ?: 3;
-      $form_state['answer_count'] = in_array($type, array('mc_single', 'mc_multi')) ? (int) $default : 1;
+      $default = in_array($type, array('mc_single', 'mc_any', 'mc_multi'))
+        ? (int) (config_get('quiz_kit.settings', 'default_answer_count') ?: 3)
+        : 1;
+      $form_state['answer_slots'] = range(0, $default - 1);
     }
   }
 
@@ -220,6 +488,24 @@ function quiz_kit_question_form($form, &$form_state, $node, $question = NULL) {
       'effect'   => 'fade',
     );
   }
+
+  // --- Section assignment ---
+  $section_options = array(0 => t('— None —'));
+  $sections = db_query(
+    'SELECT id, title FROM {quiz_kit_section} WHERE nid = :nid ORDER BY weight, id',
+    array(':nid' => $node->nid)
+  )->fetchAllKeyed();
+  $section_options += $sections;
+
+  $form['section_id'] = array(
+    '#type'          => 'select',
+    '#title'         => t('Section'),
+    '#options'       => $section_options,
+    '#default_value' => $question ? (int) $question->section_id : 0,
+    '#description'   => t('Assign this question to a section. Sections can be managed on the <a href="@url">Sections tab</a>.', array(
+      '@url' => url('node/' . $node->nid . '/sections'),
+    )),
+  );
 
   // --- Question text ---
   $form['question_text'] = array(
@@ -259,7 +545,7 @@ function quiz_kit_question_form_validate($form, &$form_state) {
     ? $form_state['question']->type
     : $form_state['values']['type'];
 
-  if (in_array($type, array('mc_single', 'mc_multi'))) {
+  if (in_array($type, array('mc_single', 'mc_any', 'mc_multi'))) {
     $filled = 0;
     foreach ($form_state['values']['answers']['rows'] as $row) {
       if (!empty($row['text'])) {
@@ -269,7 +555,7 @@ function quiz_kit_question_form_validate($form, &$form_state) {
     if ($filled < 2) {
       form_set_error('answers', t('Please provide at least two answer options.'));
     }
-    if ($type === 'mc_multi') {
+    if ($type === 'mc_multi' || $type === 'mc_any') {
       $has_correct = FALSE;
       foreach ($form_state['values']['answers']['rows'] as $row) {
         if (!empty($row['text']) && !empty($row['is_correct'])) {
@@ -288,11 +574,12 @@ function quiz_kit_question_form_validate($form, &$form_state) {
  * Submit: question form — save question, revision, and answers.
  */
 function quiz_kit_question_form_submit($form, &$form_state) {
-  $node     = $form_state['quiz_node'];
-  $question = $form_state['question'];
-  $values   = $form_state['values'];
-  $now      = REQUEST_TIME;
-  $type     = $question ? $question->type : $values['type'];
+  $node      = $form_state['quiz_node'];
+  $question  = $form_state['question'];
+  $values    = $form_state['values'];
+  $now       = REQUEST_TIME;
+  $type      = $question ? $question->type : $values['type'];
+  $section_id = isset($values['section_id']) ? (int) $values['section_id'] : 0;
 
   if ($question) {
     // New revision of an existing question.
@@ -306,8 +593,9 @@ function quiz_kit_question_form_submit($form, &$form_state) {
 
     db_update('quiz_kit_question')
       ->fields(array(
-        'vid'     => $vid,
-        'changed' => $now,
+        'vid'        => $vid,
+        'section_id' => $section_id,
+        'changed'    => $now,
       ))
       ->condition('id', $question->id)
       ->execute();
@@ -323,12 +611,13 @@ function quiz_kit_question_form_submit($form, &$form_state) {
 
     $qid = db_insert('quiz_kit_question')
       ->fields(array(
-        'nid'     => $node->nid,
-        'vid'     => 0,
-        'type'    => $type,
-        'weight'  => $next_weight,
-        'created' => $now,
-        'changed' => $now,
+        'nid'        => $node->nid,
+        'vid'        => 0,
+        'type'       => $type,
+        'section_id' => $section_id,
+        'weight'     => $next_weight,
+        'created'    => $now,
+        'changed'    => $now,
       ))
       ->execute();
 
@@ -365,6 +654,7 @@ function quiz_kit_question_form_submit($form, &$form_state) {
 function _quiz_kit_build_answer_ui(&$form, &$form_state, $type, $existing_answers) {
   switch ($type) {
     case 'mc_single':
+    case 'mc_any':
     case 'mc_multi':
       _quiz_kit_build_mc_ui($form, $form_state, $type, $existing_answers);
       break;
@@ -380,68 +670,86 @@ function _quiz_kit_build_answer_ui(&$form, &$form_state, $type, $existing_answer
 }
 
 /**
- * Answer UI for multiple-choice question types (single and multi).
+ * Answer UI for multiple-choice question types (single, any, and multi).
  *
- * Renders one text field per answer row. For mc_single a radio group below
- * the rows selects which answer is correct. For mc_multi each row has an
- * inline "Correct" checkbox.
+ * Tracks rows by stable slot IDs so individual rows can be removed without
+ * collapsing adjacent indices. Each slot gets an explicit Remove button when
+ * more than two slots exist.
  */
 function _quiz_kit_build_mc_ui(&$form, &$form_state, $type, $existing_answers) {
-  $count = $form_state['answer_count'];
+  $slots      = $form_state['answer_slots'];
+  $slot_count = count($slots);
+  // Re-index existing answers so position maps to slot order.
+  $existing   = array_values($existing_answers);
 
   $form['answers']['rows'] = array(
-    '#type' => 'container',
+    '#type'       => 'container',
     '#attributes' => array('class' => array('quiz-kit-answer-rows')),
   );
 
-  for ($i = 0; $i < $count; $i++) {
-    $existing = isset($existing_answers[$i]) ? $existing_answers[$i] : NULL;
+  foreach ($slots as $position => $slot) {
+    $existing_answer = isset($existing[$position]) ? $existing[$position] : NULL;
 
-    $form['answers']['rows'][$i] = array(
-      '#type' => 'container',
+    $form['answers']['rows'][$slot] = array(
+      '#type'       => 'container',
       '#attributes' => array('class' => array('quiz-kit-answer-row')),
     );
 
-    $form['answers']['rows'][$i]['text'] = array(
+    $form['answers']['rows'][$slot]['text'] = array(
       '#type'          => 'textfield',
-      '#title'         => t('Answer @n', array('@n' => $i + 1)),
-      '#default_value' => $existing ? $existing->answer_text : '',
-      // Only the first two rows are required; extras may be left blank.
-      '#required'      => ($i < 2),
+      '#title'         => t('Answer @n', array('@n' => $position + 1)),
+      '#default_value' => $existing_answer ? $existing_answer->answer_text : '',
+      '#required'      => ($position < 2),
     );
 
-    if ($type === 'mc_multi') {
-      $form['answers']['rows'][$i]['is_correct'] = array(
+    if ($type === 'mc_multi' || $type === 'mc_any') {
+      $form['answers']['rows'][$slot]['is_correct'] = array(
         '#type'          => 'checkbox',
         '#title'         => t('Correct'),
-        '#default_value' => $existing ? (int) $existing->is_correct : 0,
+        '#default_value' => $existing_answer ? (int) $existing_answer->is_correct : 0,
+      );
+    }
+
+    // Remove button — only shown when more than the minimum two rows exist.
+    if ($slot_count > 2) {
+      $form['answers']['rows'][$slot]['remove'] = array(
+        '#type'                    => 'submit',
+        '#value'                   => t('Remove'),
+        '#name'                    => 'remove_answer_' . $slot,
+        '#submit'                  => array('quiz_kit_remove_answer_submit'),
+        '#limit_validation_errors' => array(),
+        '#attributes'              => array('class' => array('quiz-kit-remove-answer')),
+        '#ajax'                    => array(
+          'callback' => 'quiz_kit_answers_ajax_callback',
+          'wrapper'  => 'quiz-kit-answers-wrapper',
+          'effect'   => 'fade',
+        ),
       );
     }
   }
 
-  // For mc_single, a single radio group selects the correct answer.
+  // For mc_single, a radio group below the rows picks which slot is correct.
   if ($type === 'mc_single') {
-    $correct_index = 0;
-    foreach ($existing_answers as $i => $a) {
-      if ($a->is_correct) {
-        $correct_index = $i;
+    $correct_slot = $slots[0];
+    foreach ($existing as $position => $a) {
+      if ($a->is_correct && isset($slots[$position])) {
+        $correct_slot = $slots[$position];
         break;
       }
     }
     $options = array();
-    for ($i = 0; $i < $count; $i++) {
-      $options[$i] = t('Answer @n', array('@n' => $i + 1));
+    foreach ($slots as $position => $slot) {
+      $options[$slot] = t('Answer @n', array('@n' => $position + 1));
     }
     $form['answers']['correct_single'] = array(
       '#type'          => 'radios',
       '#title'         => t('Correct answer'),
       '#options'       => $options,
-      '#default_value' => $correct_index,
+      '#default_value' => $correct_slot,
       '#required'      => TRUE,
     );
   }
 
-  // "Add another answer" — AJAX rebuild that increments the row count.
   $form['answers']['add_answer'] = array(
     '#type'                    => 'submit',
     '#value'                   => t('Add another answer'),
@@ -457,9 +765,6 @@ function _quiz_kit_build_mc_ui(&$form, &$form_state, $type, $existing_answers) {
 
 /**
  * Answer UI for True/False questions.
- *
- * No answer text fields are needed — the two options are fixed. The admin
- * simply picks which one is correct.
  */
 function _quiz_kit_build_truefalse_ui(&$form, &$form_state, $existing_answers) {
   $correct = 'true';
@@ -510,7 +815,25 @@ function quiz_kit_answers_ajax_callback($form, &$form_state) {
  * Submit handler for the "Add another answer" button.
  */
 function quiz_kit_add_answer_submit($form, &$form_state) {
-  $form_state['answer_count']++;
+  $slots = $form_state['answer_slots'];
+  $form_state['answer_slots'][] = empty($slots) ? 0 : max($slots) + 1;
+  $form_state['rebuild'] = TRUE;
+}
+
+/**
+ * Submit handler for per-row "Remove" buttons.
+ *
+ * Reads the slot ID from the triggering element's #name
+ * (format: "remove_answer_{slot}") and removes it from the active slots.
+ */
+function quiz_kit_remove_answer_submit($form, &$form_state) {
+  $name = $form_state['triggering_element']['#name'];
+  $slot = (int) str_replace('remove_answer_', '', $name);
+  $form_state['answer_slots'] = array_values(
+    array_filter($form_state['answer_slots'], function($s) use ($slot) {
+      return $s !== $slot;
+    })
+  );
   $form_state['rebuild'] = TRUE;
 }
 
@@ -520,19 +843,13 @@ function quiz_kit_add_answer_submit($form, &$form_state) {
 
 /**
  * Saves answer records for a given question revision.
- *
- * Old answers attached to previous revisions are never deleted — they remain
- * linked to any stored quiz results that reference those revisions.
- *
- * @param int    $vid     The question revision ID to attach answers to.
- * @param string $type    The question type.
- * @param array  $answers The 'answers' subtree from $form_state['values'].
  */
 function _quiz_kit_save_answers($vid, $type, $answers) {
   switch ($type) {
     case 'mc_single':
-      $correct_index = (int) $answers['correct_single'];
-      foreach ($answers['rows'] as $i => $row) {
+      $correct_slot = (int) $answers['correct_single'];
+      $weight = 0;
+      foreach ($answers['rows'] as $slot => $row) {
         if (empty($row['text'])) {
           continue;
         }
@@ -540,15 +857,17 @@ function _quiz_kit_save_answers($vid, $type, $answers) {
           ->fields(array(
             'question_vid' => $vid,
             'answer_text'  => $row['text'],
-            'is_correct'   => ($i === $correct_index) ? 1 : 0,
-            'weight'       => $i,
+            'is_correct'   => ($slot === $correct_slot) ? 1 : 0,
+            'weight'       => $weight++,
           ))
           ->execute();
       }
       break;
 
+    case 'mc_any':
     case 'mc_multi':
-      foreach ($answers['rows'] as $i => $row) {
+      $weight = 0;
+      foreach ($answers['rows'] as $slot => $row) {
         if (empty($row['text'])) {
           continue;
         }
@@ -557,7 +876,7 @@ function _quiz_kit_save_answers($vid, $type, $answers) {
             'question_vid' => $vid,
             'answer_text'  => $row['text'],
             'is_correct'   => !empty($row['is_correct']) ? 1 : 0,
-            'weight'       => $i,
+            'weight'       => $weight++,
           ))
           ->execute();
       }
@@ -650,8 +969,9 @@ function quiz_kit_question_delete_form_submit($form, &$form_state) {
  */
 function quiz_kit_question_type_options() {
   return array(
-    'mc_single'  => t('Multiple choice — single answer'),
-    'mc_multi'   => t('Multiple choice — multiple answers'),
+    'mc_single'  => t('Multiple choice — one correct answer'),
+    'mc_any'     => t('Multiple choice — any one correct answer (multiple may be correct)'),
+    'mc_multi'   => t('Multiple choice — all correct answers required'),
     'truefalse'  => t('True / False'),
     'short_text' => t('Short text (exact match)'),
   );

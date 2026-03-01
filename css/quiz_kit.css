@@ -1,5 +1,46 @@
 /* Quiz Kit — base styles */
 
+/* Quiz intro block on node view */
+.quiz-kit-node-intro {
+  background: #f5f8ff;
+  border: 1px solid #c5d3ea;
+  border-radius: 4px;
+  margin: 1.5em 0;
+  padding: 1em 1.25em;
+}
+
+.quiz-kit-meta {
+  list-style: none;
+  margin: 0 0 1em;
+  padding: 0;
+}
+
+.quiz-kit-meta li {
+  color: #444;
+  margin-bottom: 0.3em;
+}
+
+.quiz-kit-take-button {
+  background: #2a5db0;
+  border-radius: 3px;
+  color: #fff !important;
+  display: inline-block;
+  font-size: 1em;
+  font-weight: bold;
+  padding: 0.55em 1.4em;
+  text-decoration: none;
+}
+
+.quiz-kit-take-button:hover {
+  background: #1e4590;
+}
+
+.quiz-kit-attempts-exhausted {
+  color: #888;
+  font-style: italic;
+  margin: 0;
+}
+
 /* Timer */
 .quiz-kit-timer {
   background: #f5f5f5;
@@ -34,6 +75,34 @@
   font-weight: bold;
 }
 
+/* Answer authoring rows */
+.quiz-kit-answer-row {
+  align-items: center;
+  display: flex;
+  gap: 0.75em;
+  margin-bottom: 0.5em;
+}
+
+.quiz-kit-answer-row .form-item {
+  margin: 0;
+}
+
+.quiz-kit-remove-answer {
+  background: none;
+  border: 1px solid #aaa;
+  border-radius: 3px;
+  color: #b00000;
+  cursor: pointer;
+  font-size: 0.85em;
+  padding: 0.2em 0.6em;
+  white-space: nowrap;
+}
+
+.quiz-kit-remove-answer:hover {
+  background: #fff0f0;
+  border-color: #b00000;
+}
+
 /* Answer review */
 .quiz-kit-answer-item {
   border-left: 4px solid #ccc;
@@ -52,4 +121,59 @@
 .quiz-kit-question-text {
   font-weight: bold;
   margin-bottom: 0.25em;
+}
+
+/* Section header (quiz-taking page) */
+.quiz-kit-section-header {
+  border-bottom: 2px solid #ccc;
+  margin-bottom: 1.25em;
+  margin-top: 1.5em;
+  padding-bottom: 0.5em;
+}
+
+.quiz-kit-section-header h3 {
+  margin: 0 0 0.25em;
+}
+
+.quiz-kit-section-instructions {
+  color: #444;
+  font-size: 0.95em;
+  margin-top: 0.25em;
+}
+
+/* Section group headers in the admin questions table */
+.quiz-kit-questions-section-header {
+  background: #eef2f7;
+  border-top: 2px solid #b0bcd0;
+  color: #2b4370;
+  font-weight: bold;
+  padding: 0.4em 0.6em;
+}
+
+/* Section scores (results page) */
+.quiz-kit-section-scores {
+  background: #f9f9f9;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  margin-bottom: 1.5em;
+  padding: 0.75em 1em;
+}
+
+.quiz-kit-section-scores h3 {
+  font-size: 1em;
+  margin: 0 0 0.5em;
+}
+
+.quiz-kit-section-scores ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.quiz-kit-section-scores li {
+  margin-bottom: 0.25em;
+}
+
+.quiz-kit-section-score-title {
+  color: #555;
 }

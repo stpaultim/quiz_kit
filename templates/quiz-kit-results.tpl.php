@@ -12,6 +12,8 @@
  * - $date_taken: Formatted date the quiz was submitted.
  * - $answers: Array of answer objects with question_text, answer_given, is_correct.
  * - $show_correct: Boolean — whether to reveal correct answers.
+ * - $section_scores: Array of objects with title and score properties.
+ * - $show_section_scores: Boolean — whether to show the section breakdown.
  */
 ?>
 <div class="quiz-kit-results <?php print $passed ? 'quiz-kit-passed' : 'quiz-kit-failed'; ?>">
@@ -23,6 +25,20 @@
     <p><?php print t('Completed: @date', array('@date' => $date_taken)); ?></p>
   </div>
 
+  <?php if ($show_section_scores && $section_scores): ?>
+    <div class="quiz-kit-section-scores">
+      <h3><?php print t('Section scores'); ?></h3>
+      <ul>
+        <?php foreach ($section_scores as $ss): ?>
+          <li>
+            <span class="quiz-kit-section-score-title"><?php print check_plain($ss->title); ?></span>:
+            <strong><?php print $ss->score; ?>%</strong>
+          </li>
+        <?php endforeach; ?>
+      </ul>
+    </div>
+  <?php endif; ?>
+
   <?php if ($show_correct && $answers): ?>
     <div class="quiz-kit-answer-review">
       <h3><?php print t('Review'); ?></h3>
@@ -30,7 +46,7 @@
         <div class="quiz-kit-answer-item <?php print $a->is_correct ? 'correct' : 'incorrect'; ?>">
           <p class="quiz-kit-question-text"><?php print check_plain($a->question_text); ?></p>
           <p class="quiz-kit-answer-given">
-            <?php print t('Your answer: @answer', array('@answer' => $a->answer_given)); ?>
+            <?php print t('Your answer: @answer', array('@answer' => $a->answer_display)); ?>
             <?php print $a->is_correct ? '✓' : '✗'; ?>
           </p>
         </div>

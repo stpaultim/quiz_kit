@@ -52,89 +52,168 @@ function quiz_kit_take_page($node) {
     return t('This quiz has no questions yet.');
   }
 
-  return backdrop_get_form('quiz_kit_take_form', $node, $questions);
+  // Compute pages (groups of questions separated by section page breaks).
+  $pages = _quiz_kit_compute_pages($node->nid, $questions);
+
+  return backdrop_get_form('quiz_kit_take_form', $node, $pages);
 }
 
 /**
- * Form: quiz-taking form.
+ * Form: quiz-taking form (supports multi-step pagination via sections).
+ *
+ * $pages is an array of pages; each page is an array of groups:
+ *   array('section' => $section_object_or_NULL, 'questions' => [...])
  */
-function quiz_kit_take_form($form, &$form_state, $node, $questions) {
+function quiz_kit_take_form($form, &$form_state, $node, $pages) {
   $form_state['quiz_node'] = $node;
-  $form_state['questions'] = $questions;
 
-  // Start a result record if not already in progress.
-  if (empty($form_state['result_id'])) {
+  // Initialise persistent storage on the first build only.
+  if (!isset($form_state['storage']['result_id'])) {
     global $user;
-    $form_state['result_id'] = db_insert('quiz_kit_result')
+    $form_state['storage']['result_id'] = db_insert('quiz_kit_result')
       ->fields(array(
-        'nid' => $node->nid,
-        'uid' => $user->uid,
-        'score' => 0,
-        'passed' => 0,
-        'started' => REQUEST_TIME,
+        'nid'      => $node->nid,
+        'uid'      => $user->uid,
+        'score'    => 0,
+        'passed'   => 0,
+        'started'  => REQUEST_TIME,
         'finished' => 0,
       ))
       ->execute();
+    $form_state['storage']['current_page']        = 0;
+    $form_state['storage']['accumulated_answers'] = array();
   }
+
+  $current_page = $form_state['storage']['current_page'];
+  $total_pages  = count($pages);
+  $page_data    = isset($pages[$current_page]) ? $pages[$current_page] : array();
 
   $form['#tree'] = TRUE;
 
-  foreach ($questions as $q) {
-    $answers = _quiz_kit_load_answers($q->vid);
-    $form['questions'][$q->id] = _quiz_kit_question_element($q, $answers);
+  // Progress indicator for multi-page quizzes.
+  if ($total_pages > 1) {
+    $form['progress'] = array(
+      '#markup' => '<div class="quiz-kit-progress">'
+        . t('Page @current of @total', array('@current' => $current_page + 1, '@total' => $total_pages))
+        . '</div>',
+      '#weight' => -10,
+    );
+  }
+
+  // Render section headers and questions for the current page.
+  foreach ($page_data as $group_idx => $group) {
+    if (!empty($group['section'])) {
+      $sec    = $group['section'];
+      $markup = '<div class="quiz-kit-section-header">'
+        . '<h3>' . check_plain($sec->title) . '</h3>';
+      if (!empty($sec->instructions)) {
+        $markup .= '<div class="quiz-kit-section-instructions">'
+          . nl2br(check_plain($sec->instructions))
+          . '</div>';
+      }
+      $markup .= '</div>';
+      $form['section_header_' . $sec->id] = array(
+        '#markup' => $markup,
+        '#weight' => $group_idx,
+      );
+    }
+
+    foreach ($group['questions'] as $q) {
+      $answers = _quiz_kit_load_answers($q->vid);
+      $form['questions'][$q->id] = _quiz_kit_question_element($q, $answers);
+    }
   }
 
   $form['actions']['#type'] = 'actions';
-  $form['actions']['submit'] = array(
-    '#type' => 'submit',
-    '#value' => t('Submit quiz'),
-  );
+  if ($current_page < $total_pages - 1) {
+    $form['actions']['next'] = array(
+      '#type'   => 'submit',
+      '#value'  => t('Next'),
+      '#submit' => array('quiz_kit_take_form_next_submit'),
+    );
+  }
+  else {
+    $form['actions']['submit'] = array(
+      '#type'  => 'submit',
+      '#value' => t('Submit quiz'),
+    );
+  }
 
   return $form;
 }
 
 /**
- * Submit: quiz-taking form — grade and save results.
+ * Submit: advance to the next page of the quiz.
+ *
+ * Accumulates this page's answers into storage and triggers a form rebuild
+ * so the next page's questions are displayed.
+ */
+function quiz_kit_take_form_next_submit($form, &$form_state) {
+  // Save answers from the current page.
+  if (!empty($form_state['values']['questions'])) {
+    foreach ($form_state['values']['questions'] as $qid => $data) {
+      $form_state['storage']['accumulated_answers'][$qid] = $data;
+    }
+  }
+
+  $form_state['storage']['current_page']++;
+  $form_state['rebuild'] = TRUE;
+}
+
+/**
+ * Submit: quiz-taking form final page — grade and save results.
  */
 function quiz_kit_take_form_submit($form, &$form_state) {
-  $node = $form_state['quiz_node'];
-  $questions = $form_state['questions'];
-  $result_id = $form_state['result_id'];
-  $responses = $form_state['values']['questions'];
+  $node      = $form_state['quiz_node'];
+  $result_id = $form_state['storage']['result_id'];
 
-  $total = count($questions);
-  $correct = 0;
+  // Merge answers accumulated from earlier pages with the final page's answers.
+  $responses = $form_state['storage']['accumulated_answers'];
+  if (!empty($form_state['values']['questions'])) {
+    $responses += $form_state['values']['questions'];
+  }
 
-  foreach ($questions as $q) {
-    $given = isset($responses[$q->id]['answer']) ? $responses[$q->id]['answer'] : NULL;
+  $all_qs    = _quiz_kit_load_questions($node->nid);
+  $total     = count($all_qs);
+  $correct   = 0;
+  $grade_map = array();
+
+  foreach ($all_qs as $q) {
+    $given      = isset($responses[$q->id]['answer']) ? $responses[$q->id]['answer'] : NULL;
     $is_correct = _quiz_kit_grade_answer($q, $given);
+    $grade_map[$q->id] = $is_correct;
     if ($is_correct) {
       $correct++;
     }
 
     db_insert('quiz_kit_result_answer')
       ->fields(array(
-        'result_id' => $result_id,
-        'question_id' => $q->id,
+        'result_id'    => $result_id,
+        'question_id'  => $q->id,
         'question_vid' => $q->vid,
         'answer_given' => is_array($given) ? serialize($given) : (string) $given,
-        'is_correct' => (int) $is_correct,
+        'is_correct'   => (int) $is_correct,
       ))
       ->execute();
   }
 
-  $score = $total > 0 ? round(($correct / $total) * 100, 1) : 0;
+  $score     = $total > 0 ? round(($correct / $total) * 100, 1) : 0;
   $pass_rate = (int) _quiz_kit_node_setting($node, 'pass_rate', 75);
-  $passed = $score >= $pass_rate ? 1 : 0;
+  $passed    = $score >= $pass_rate ? 1 : 0;
 
   db_update('quiz_kit_result')
     ->fields(array(
-      'score' => $score,
-      'passed' => $passed,
+      'score'    => $score,
+      'passed'   => $passed,
       'finished' => REQUEST_TIME,
     ))
     ->condition('id', $result_id)
     ->execute();
+
+  // Save per-section scores when the quiz is configured to show them.
+  if ((bool) _quiz_kit_node_setting($node, 'show_section_scores', FALSE)) {
+    _quiz_kit_save_section_scores($result_id, $all_qs, $grade_map);
+  }
 
   $form_state['redirect'] = 'node/' . $node->nid . '/results/' . $result_id;
 }
@@ -178,21 +257,87 @@ function quiz_kit_results_list_page($node) {
  * Page callback: single result detail.
  */
 function quiz_kit_result_detail_page($node, $result) {
+  // Include question type so we can decode answer_given correctly.
   $answers = db_query(
-    'SELECT ra.*, r.question_text FROM {quiz_kit_result_answer} ra
+    'SELECT ra.*, r.question_text, q.type
+     FROM {quiz_kit_result_answer} ra
      JOIN {quiz_kit_question_revision} r ON r.vid = ra.question_vid
+     JOIN {quiz_kit_question} q ON q.id = ra.question_id
      WHERE ra.result_id = :rid',
     array(':rid' => $result->id)
   )->fetchAll();
 
+  // Decode each answer_given into a human-readable string.
+  foreach ($answers as $a) {
+    $a->answer_display = _quiz_kit_decode_answer_given($a->type, $a->answer_given);
+  }
+
   $show_correct = (bool) _quiz_kit_node_setting($node, 'show_answers', TRUE);
 
+  // Load per-section scores if the quiz is configured to show them.
+  $show_section_scores = (bool) _quiz_kit_node_setting($node, 'show_section_scores', FALSE);
+  $section_scores = array();
+  if ($show_section_scores) {
+    $section_scores = db_query(
+      'SELECT rs.score, s.title FROM {quiz_kit_result_section} rs
+       JOIN {quiz_kit_section} s ON s.id = rs.section_id
+       WHERE rs.result_id = :rid
+       ORDER BY s.weight, s.id',
+      array(':rid' => $result->id)
+    )->fetchAll();
+  }
+
   return theme('quiz_kit_results', array(
-    'node' => $node,
-    'result' => $result,
-    'answers' => $answers,
-    'show_correct' => $show_correct,
+    'node'                => $node,
+    'result'              => $result,
+    'answers'             => $answers,
+    'show_correct'        => $show_correct,
+    'section_scores'      => $section_scores,
+    'show_section_scores' => $show_section_scores,
   ));
+}
+
+/**
+ * Decodes a stored answer_given value into human-readable text.
+ *
+ * @param string $type         The question type (mc_single, mc_multi, etc.).
+ * @param string $answer_given The raw stored value.
+ *
+ * @return string
+ */
+function _quiz_kit_decode_answer_given($type, $answer_given) {
+  switch ($type) {
+    case 'mc_single':
+    case 'mc_any':
+    case 'truefalse':
+      if (is_numeric($answer_given) && (int) $answer_given > 0) {
+        $text = db_query(
+          'SELECT answer_text FROM {quiz_kit_answer} WHERE id = :id',
+          array(':id' => $answer_given)
+        )->fetchField();
+        return ($text !== FALSE) ? $text : $answer_given;
+      }
+      return t('(no answer)');
+
+    case 'mc_multi':
+      $data = @unserialize($answer_given);
+      if (!is_array($data)) {
+        return $answer_given;
+      }
+      $checked_ids = array_keys(array_filter($data));
+      if (empty($checked_ids)) {
+        return t('(no answer)');
+      }
+      $texts = db_query(
+        'SELECT answer_text FROM {quiz_kit_answer} WHERE id IN (:ids) ORDER BY weight',
+        array(':ids' => $checked_ids)
+      )->fetchCol();
+      return implode(', ', $texts);
+
+    case 'short_text':
+    default:
+      return ($answer_given !== '') ? $answer_given : t('(no answer)');
+  }
 }
 
 /**
@@ -251,27 +396,150 @@ function _quiz_kit_load_answers($question_vid) {
 }
 
 /**
+ * Computes quiz pages grouped by section (Option B).
+ *
+ * Returns an array of pages. Each page is an array of groups:
+ *   array('section' => $section_object_or_NULL, 'questions' => [...])
+ *
+ * Sections are iterated in weight order. Questions belonging to each section
+ * are kept together regardless of their individual weight values, matching the
+ * grouped display in the Questions admin tab. A new page is started before a
+ * section when that section has page_break = 1 and the current page already
+ * has content.
+ *
+ * @param int   $nid           The quiz node ID.
+ * @param array $all_questions All questions for the quiz (from _quiz_kit_load_questions).
+ *
+ * @return array
+ */
+function _quiz_kit_compute_pages($nid, $all_questions) {
+  // Load sections in weight order.
+  $sections = db_query(
+    'SELECT * FROM {quiz_kit_section} WHERE nid = :nid ORDER BY weight, id',
+    array(':nid' => $nid)
+  )->fetchAllAssoc('id');
+
+  if (empty($sections)) {
+    // No sections — single page, one group containing all questions.
+    return array(
+      array(array('section' => NULL, 'questions' => $all_questions)),
+    );
+  }
+
+  // Index questions by section_id, preserving question weight order.
+  $by_section  = array();
+  $unsectioned = array();
+  foreach ($all_questions as $q) {
+    $sid = (int) $q->section_id;
+    if ($sid > 0 && isset($sections[$sid])) {
+      $by_section[$sid][] = $q;
+    }
+    else {
+      $unsectioned[] = $q;
+    }
+  }
+
+  $pages               = array();
+  $current_page_groups = array();
+
+  // Unsectioned questions appear first on the initial page (no page break).
+  if (!empty($unsectioned)) {
+    $current_page_groups[] = array('section' => NULL, 'questions' => $unsectioned);
+  }
+
+  // Iterate sections in weight order.
+  foreach ($sections as $sid => $section) {
+    if (empty($by_section[$sid])) {
+      continue; // Skip sections that have no questions.
+    }
+
+    // Start a new page before this section if configured and the current
+    // page already has content.
+    if ($section->page_break && !empty($current_page_groups)) {
+      $pages[]             = $current_page_groups;
+      $current_page_groups = array();
+    }
+
+    $current_page_groups[] = array(
+      'section'   => $section,
+      'questions' => $by_section[$sid],
+    );
+  }
+
+  // Flush the final page.
+  if (!empty($current_page_groups)) {
+    $pages[] = $current_page_groups;
+  }
+
+  if (empty($pages)) {
+    $pages = array(array(array('section' => NULL, 'questions' => array())));
+  }
+
+  return $pages;
+}
+
+/**
+ * Saves per-section scores for a completed quiz attempt.
+ *
+ * Only called when field_quiz_show_section_scores is enabled on the quiz.
+ *
+ * @param int   $result_id  The quiz_kit_result.id.
+ * @param array $all_qs     All question objects for the quiz.
+ * @param array $grade_map  Map of question_id => TRUE/FALSE correctness.
+ */
+function _quiz_kit_save_section_scores($result_id, $all_qs, $grade_map) {
+  // Group question correctness by section_id (skipping unsectioned questions).
+  $by_section = array();
+  foreach ($all_qs as $q) {
+    $sid = (int) $q->section_id;
+    if ($sid > 0) {
+      $by_section[$sid][] = $q;
+    }
+  }
+
+  foreach ($by_section as $section_id => $qs) {
+    $total   = count($qs);
+    $correct = 0;
+    foreach ($qs as $q) {
+      if (!empty($grade_map[$q->id])) {
+        $correct++;
+      }
+    }
+    $section_score = $total > 0 ? round(($correct / $total) * 100, 1) : 0;
+
+    db_insert('quiz_kit_result_section')
+      ->fields(array(
+        'result_id'  => $result_id,
+        'section_id' => $section_id,
+        'score'      => $section_score,
+      ))
+      ->execute();
+  }
+}
+
+/**
  * Builds a form element for a single question.
  */
 function _quiz_kit_question_element($question, $answers) {
   $text = db_query('SELECT question_text FROM {quiz_kit_question_revision} WHERE vid = :vid', array(':vid' => $question->vid))->fetchField();
 
   $element = array(
-    '#type' => 'fieldset',
+    '#type'  => 'fieldset',
     '#title' => check_plain($text),
   );
 
   switch ($question->type) {
     case 'mc_single':
+    case 'mc_any':
     case 'truefalse':
       $options = array();
       foreach ($answers as $a) {
         $options[$a->id] = check_plain($a->answer_text);
       }
       $element['answer'] = array(
-        '#type' => 'radios',
-        '#title' => t('Your answer'),
-        '#options' => $options,
+        '#type'     => 'radios',
+        '#title'    => t('Your answer'),
+        '#options'  => $options,
         '#required' => TRUE,
       );
       break;
@@ -282,16 +550,16 @@ function _quiz_kit_question_element($question, $answers) {
         $options[$a->id] = check_plain($a->answer_text);
       }
       $element['answer'] = array(
-        '#type' => 'checkboxes',
-        '#title' => t('Select all that apply'),
+        '#type'    => 'checkboxes',
+        '#title'   => t('Select all that apply'),
         '#options' => $options,
       );
       break;
 
     case 'short_text':
       $element['answer'] = array(
-        '#type' => 'textfield',
-        '#title' => t('Your answer'),
+        '#type'     => 'textfield',
+        '#title'    => t('Your answer'),
         '#required' => TRUE,
       );
       break;
@@ -312,6 +580,13 @@ function _quiz_kit_grade_answer($question, $given) {
         array(':vid' => $question->vid)
       )->fetchField();
       return (int) $given === (int) $correct_id;
+
+    case 'mc_any':
+      $correct_ids = db_query(
+        'SELECT id FROM {quiz_kit_answer} WHERE question_vid = :vid AND is_correct = 1',
+        array(':vid' => $question->vid)
+      )->fetchCol();
+      return in_array((int) $given, array_map('intval', $correct_ids));
 
     case 'mc_multi':
       $correct_ids = db_query(
@@ -336,10 +611,6 @@ function _quiz_kit_grade_answer($question, $given) {
 
 /**
  * Returns a per-node quiz setting, falling back to a default.
- *
- * Quiz settings are stored as node fields. This helper reads them via
- * field_get_items() once field definitions are in place. For now it returns
- * the supplied default.
  *
  * @todo Replace stub with field_get_items() reads once fields are defined.
  */

@@ -38,6 +38,13 @@ function quiz_kit_schema() {
         'not null' => TRUE,
         'description' => 'Question type: mc_single, mc_multi, truefalse, short_text.',
       ),
+      'section_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'The {quiz_kit_section}.id this question belongs to. 0 = no section.',
+      ),
       'weight' => array(
         'type' => 'int',
         'not null' => TRUE,
@@ -237,6 +244,88 @@ function quiz_kit_schema() {
     ),
   );
 
+  $schema['quiz_kit_section'] = array(
+    'description' => 'Stores sections that group questions within a quiz.',
+    'fields' => array(
+      'id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Primary key.',
+      ),
+      'nid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The {node}.nid of the quiz this section belongs to.',
+      ),
+      'title' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'Section title shown to quiz-takers.',
+      ),
+      'instructions' => array(
+        'type' => 'text',
+        'size' => 'medium',
+        'not null' => FALSE,
+        'description' => 'Optional instructions shown at the top of this section.',
+      ),
+      'weight' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Display order within the quiz.',
+      ),
+      'page_break' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => '1 if this section begins a new quiz page.',
+      ),
+    ),
+    'primary key' => array('id'),
+    'indexes' => array(
+      'nid' => array('nid'),
+    ),
+  );
+
+  $schema['quiz_kit_result_section'] = array(
+    'description' => 'Stores per-section scores within a quiz result.',
+    'fields' => array(
+      'id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Primary key.',
+      ),
+      'result_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The {quiz_kit_result}.id.',
+      ),
+      'section_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The {quiz_kit_section}.id.',
+      ),
+      'score' => array(
+        'type' => 'float',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Section score as a percentage (0–100).',
+      ),
+    ),
+    'primary key' => array('id'),
+    'indexes' => array(
+      'result_id' => array('result_id'),
+    ),
+  );
+
   return $schema;
 }
 
@@ -279,8 +368,6 @@ function quiz_kit_install() {
   taxonomy_vocabulary_save($vocab);
 
   // --- Category field on the quiz node type ---
-  // Create the field if it does not already exist (another module may have
-  // created field_quiz_category on a previous install).
   if (!field_info_field('field_quiz_category')) {
     field_create_field(array(
       'field_name' => 'field_quiz_category',
@@ -315,6 +402,88 @@ function quiz_kit_install() {
       ),
     ),
   ));
+
+  // --- Per-quiz pass rate field ---
+  _quiz_kit_create_pass_rate_field();
+
+  // --- Per-quiz show section scores field ---
+  _quiz_kit_create_show_section_scores_field();
+}
+
+/**
+ * Creates the field_quiz_pass_rate field and instance.
+ */
+function _quiz_kit_create_pass_rate_field() {
+  if (!field_info_field('field_quiz_pass_rate')) {
+    field_create_field(array(
+      'field_name' => 'field_quiz_pass_rate',
+      'type'       => 'number_integer',
+      'cardinality' => 1,
+    ));
+  }
+
+  if (!field_info_instance('node', 'field_quiz_pass_rate', 'quiz_kit_quiz')) {
+    field_create_instance(array(
+      'field_name'  => 'field_quiz_pass_rate',
+      'entity_type' => 'node',
+      'bundle'      => 'quiz_kit_quiz',
+      'label'       => t('Pass rate (%)'),
+      'description' => t('Score percentage required to pass (0–100). Leave blank to use the site-wide default.'),
+      'required'    => FALSE,
+      'settings'    => array(
+        'min' => 0,
+        'max' => 100,
+      ),
+      'widget' => array(
+        'type'   => 'number',
+        'weight' => 11,
+      ),
+      'display' => array(
+        'default' => array(
+          'type'  => 'hidden',
+          'label' => 'hidden',
+        ),
+      ),
+    ));
+  }
+}
+
+/**
+ * Creates the field_quiz_show_section_scores field and instance.
+ */
+function _quiz_kit_create_show_section_scores_field() {
+  if (!field_info_field('field_quiz_show_section_scores')) {
+    field_create_field(array(
+      'field_name'  => 'field_quiz_show_section_scores',
+      'type'        => 'list_boolean',
+      'cardinality' => 1,
+      'settings'    => array(
+        'allowed_values' => array(0 => '', 1 => ''),
+      ),
+    ));
+  }
+
+  if (!field_info_instance('node', 'field_quiz_show_section_scores', 'quiz_kit_quiz')) {
+    field_create_instance(array(
+      'field_name'  => 'field_quiz_show_section_scores',
+      'entity_type' => 'node',
+      'bundle'      => 'quiz_kit_quiz',
+      'label'       => t('Show section scores'),
+      'description' => t('When enabled, quiz-takers see a score breakdown by section on the results page.'),
+      'required'    => FALSE,
+      'widget' => array(
+        'type'     => 'options_onoff',
+        'weight'   => 12,
+        'settings' => array('display_label' => 1),
+      ),
+      'display' => array(
+        'default' => array(
+          'type'  => 'hidden',
+          'label' => 'hidden',
+        ),
+      ),
+    ));
+  }
 }
 
 /**
@@ -327,12 +496,15 @@ function quiz_kit_uninstall() {
     node_delete_multiple($nids);
   }
 
-  // Delete the field instance and field.
-  if ($instance = field_info_instance('node', 'field_quiz_category', 'quiz_kit_quiz')) {
-    field_delete_instance($instance);
-  }
-  if (field_info_field('field_quiz_category')) {
-    field_delete_field('field_quiz_category');
+  // Delete field instances and fields.
+  $fields = array('field_quiz_category', 'field_quiz_pass_rate', 'field_quiz_show_section_scores');
+  foreach ($fields as $field_name) {
+    if ($instance = field_info_instance('node', $field_name, 'quiz_kit_quiz')) {
+      field_delete_instance($instance);
+    }
+    if (field_info_field($field_name)) {
+      field_delete_field($field_name);
+    }
   }
   field_purge_batch(500);
 
@@ -348,4 +520,229 @@ function quiz_kit_uninstall() {
   db_delete('variable')
     ->condition('name', 'quiz_kit_%', 'LIKE')
     ->execute();
+}
+
+// ---------------------------------------------------------------------------
+// Update hooks
+// ---------------------------------------------------------------------------
+
+/**
+ * Add the per-quiz pass rate field to existing installations.
+ */
+function quiz_kit_update_1001() {
+  _quiz_kit_create_pass_rate_field();
+}
+
+/**
+ * Add the quiz sections table.
+ */
+function quiz_kit_update_1002() {
+  if (!db_table_exists('quiz_kit_section')) {
+    db_create_table('quiz_kit_section', array(
+      'description' => 'Stores sections that group questions within a quiz.',
+      'fields' => array(
+        'id' => array(
+          'type' => 'serial',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'description' => 'Primary key.',
+        ),
+        'nid' => array(
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'description' => 'The {node}.nid of the quiz.',
+        ),
+        'title' => array(
+          'type' => 'varchar',
+          'length' => 255,
+          'not null' => TRUE,
+          'default' => '',
+          'description' => 'Section title.',
+        ),
+        'instructions' => array(
+          'type' => 'text',
+          'size' => 'medium',
+          'not null' => FALSE,
+          'description' => 'Optional instructions shown at the top of this section.',
+        ),
+        'weight' => array(
+          'type' => 'int',
+          'not null' => TRUE,
+          'default' => 0,
+          'description' => 'Display order within the quiz.',
+        ),
+        'page_break' => array(
+          'type' => 'int',
+          'size' => 'tiny',
+          'not null' => TRUE,
+          'default' => 0,
+          'description' => '1 if this section begins a new quiz page.',
+        ),
+      ),
+      'primary key' => array('id'),
+      'indexes' => array('nid' => array('nid')),
+    ));
+  }
+}
+
+/**
+ * Add section_id column to quiz_kit_question.
+ */
+function quiz_kit_update_1003() {
+  if (!db_field_exists('quiz_kit_question', 'section_id')) {
+    db_add_field('quiz_kit_question', 'section_id', array(
+      'type'        => 'int',
+      'unsigned'    => TRUE,
+      'not null'    => TRUE,
+      'default'     => 0,
+      'description' => 'The {quiz_kit_section}.id. 0 = no section.',
+    ));
+  }
+}
+
+/**
+ * Add the quiz result section scores table.
+ */
+function quiz_kit_update_1004() {
+  if (!db_table_exists('quiz_kit_result_section')) {
+    db_create_table('quiz_kit_result_section', array(
+      'description' => 'Stores per-section scores within a quiz result.',
+      'fields' => array(
+        'id' => array(
+          'type' => 'serial',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'description' => 'Primary key.',
+        ),
+        'result_id' => array(
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'description' => 'The {quiz_kit_result}.id.',
+        ),
+        'section_id' => array(
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'description' => 'The {quiz_kit_section}.id.',
+        ),
+        'score' => array(
+          'type' => 'float',
+          'not null' => TRUE,
+          'default' => 0,
+          'description' => 'Section score as a percentage (0–100).',
+        ),
+      ),
+      'primary key' => array('id'),
+      'indexes' => array('result_id' => array('result_id')),
+    ));
+  }
+}
+
+/**
+ * Add the per-quiz show_section_scores field.
+ */
+function quiz_kit_update_1005() {
+  _quiz_kit_create_show_section_scores_field();
+}
+
+/**
+ * Fix the show_section_scores field widget to use options_onoff (checkbox).
+ */
+function quiz_kit_update_1007() {
+  $instance = field_info_instance('node', 'field_quiz_show_section_scores', 'quiz_kit_quiz');
+  if ($instance) {
+    $instance['widget'] = array(
+      'type'     => 'options_onoff',
+      'weight'   => 12,
+      'settings' => array('display_label' => 1),
+    );
+    field_update_instance($instance);
+  }
+}
+
+/**
+ * Ensure all section-related schema changes are applied.
+ *
+ * Acts as a catch-all in case updates 1002–1005 were skipped due to a
+ * schema-version mismatch during development. All operations are guarded
+ * by existence checks so running this more than once is safe.
+ */
+function quiz_kit_update_1006() {
+  // quiz_kit_section table.
+  if (!db_table_exists('quiz_kit_section')) {
+    db_create_table('quiz_kit_section', array(
+      'description' => 'Stores sections that group questions within a quiz.',
+      'fields' => array(
+        'id' => array(
+          'type' => 'serial', 'unsigned' => TRUE, 'not null' => TRUE,
+          'description' => 'Primary key.',
+        ),
+        'nid' => array(
+          'type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE,
+          'description' => 'The {node}.nid of the quiz.',
+        ),
+        'title' => array(
+          'type' => 'varchar', 'length' => 255, 'not null' => TRUE, 'default' => '',
+          'description' => 'Section title.',
+        ),
+        'instructions' => array(
+          'type' => 'text', 'size' => 'medium', 'not null' => FALSE,
+          'description' => 'Optional instructions shown at the top of this section.',
+        ),
+        'weight' => array(
+          'type' => 'int', 'not null' => TRUE, 'default' => 0,
+          'description' => 'Display order within the quiz.',
+        ),
+        'page_break' => array(
+          'type' => 'int', 'size' => 'tiny', 'not null' => TRUE, 'default' => 0,
+          'description' => '1 if this section begins a new quiz page.',
+        ),
+      ),
+      'primary key' => array('id'),
+      'indexes' => array('nid' => array('nid')),
+    ));
+  }
+
+  // section_id column on quiz_kit_question.
+  if (!db_field_exists('quiz_kit_question', 'section_id')) {
+    db_add_field('quiz_kit_question', 'section_id', array(
+      'type'        => 'int',
+      'unsigned'    => TRUE,
+      'not null'    => TRUE,
+      'default'     => 0,
+      'description' => 'The {quiz_kit_section}.id. 0 = no section.',
+    ));
+  }
+
+  // quiz_kit_result_section table.
+  if (!db_table_exists('quiz_kit_result_section')) {
+    db_create_table('quiz_kit_result_section', array(
+      'description' => 'Stores per-section scores within a quiz result.',
+      'fields' => array(
+        'id' => array(
+          'type' => 'serial', 'unsigned' => TRUE, 'not null' => TRUE,
+          'description' => 'Primary key.',
+        ),
+        'result_id' => array(
+          'type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE,
+          'description' => 'The {quiz_kit_result}.id.',
+        ),
+        'section_id' => array(
+          'type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE,
+          'description' => 'The {quiz_kit_section}.id.',
+        ),
+        'score' => array(
+          'type' => 'float', 'not null' => TRUE, 'default' => 0,
+          'description' => 'Section score as a percentage (0–100).',
+        ),
+      ),
+      'primary key' => array('id'),
+      'indexes' => array('result_id' => array('result_id')),
+    ));
+  }
+
+  // field_quiz_show_section_scores node field.
+  _quiz_kit_create_show_section_scores_field();
 }
