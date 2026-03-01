@@ -10,18 +10,23 @@
  * - $passed: Boolean.
  * - $pass_message: Localised pass/fail message string.
  * - $date_taken: Formatted date the quiz was submitted.
- * - $answers: Array of answer objects with question_text, answer_given, is_correct.
- * - $show_correct: Boolean — whether to reveal correct answers.
+ * - $total_count: Total number of questions answered.
+ * - $correct_count: Number of questions answered correctly.
+ * - $answers: Array of answer objects with question_text, answer_display, is_correct.
+ * - $show_correct: Boolean — whether to reveal the answer review table.
  * - $section_scores: Array of objects with title and score properties.
  * - $show_section_scores: Boolean — whether to show the section breakdown.
  */
 ?>
 <div class="quiz-kit-results <?php print $passed ? 'quiz-kit-passed' : 'quiz-kit-failed'; ?>">
-  <h2><?php print $quiz_title; ?></h2>
 
   <div class="quiz-kit-score">
-    <p><?php print t('Score: <strong>@score%</strong>', array('@score' => $score)); ?></p>
     <p class="quiz-kit-pass-message"><?php print $pass_message; ?></p>
+    <p><?php print t('Score: <strong>@score%</strong> (@correct of @total correct)', array(
+      '@score'   => $score,
+      '@correct' => $correct_count,
+      '@total'   => $total_count,
+    )); ?></p>
     <p><?php print t('Completed: @date', array('@date' => $date_taken)); ?></p>
   </div>
 
@@ -42,15 +47,36 @@
   <?php if ($show_correct && $answers): ?>
     <div class="quiz-kit-answer-review">
       <h3><?php print t('Review'); ?></h3>
-      <?php foreach ($answers as $a): ?>
-        <div class="quiz-kit-answer-item <?php print $a->is_correct ? 'correct' : 'incorrect'; ?>">
-          <p class="quiz-kit-question-text"><?php print check_plain($a->question_text); ?></p>
-          <p class="quiz-kit-answer-given">
-            <?php print t('Your answer: @answer', array('@answer' => $a->answer_display)); ?>
-            <?php print $a->is_correct ? '✓' : '✗'; ?>
-          </p>
-        </div>
-      <?php endforeach; ?>
+      <table class="quiz-kit-results-table">
+        <thead>
+          <tr>
+            <th><?php print t('Question'); ?></th>
+            <th><?php print t('Your answer'); ?></th>
+            <th><?php print t('Status'); ?></th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php $n = 1; foreach ($answers as $a): ?>
+          <tr class="<?php print $a->is_correct ? 'quiz-kit-correct' : 'quiz-kit-incorrect'; ?>">
+            <td><?php print $n . '. ' . check_plain($a->question_text); ?></td>
+            <td>
+              <?php print check_plain($a->answer_display); ?>
+              <?php if (!$a->is_correct && !empty($a->correct_answer_display)): ?>
+                <br><em class="quiz-kit-correct-answer"><?php print t('Correct: @answer', array('@answer' => check_plain($a->correct_answer_display))); ?></em>
+              <?php endif; ?>
+            </td>
+            <td class="quiz-kit-status">
+              <?php if ($a->is_correct): ?>
+                <span class="quiz-kit-correct-label"><?php print t('Correct'); ?></span>
+              <?php else: ?>
+                <span class="quiz-kit-incorrect-label"><?php print t('Incorrect'); ?></span>
+              <?php endif; ?>
+            </td>
+          </tr>
+          <?php $n++; endforeach; ?>
+        </tbody>
+      </table>
     </div>
   <?php endif; ?>
+
 </div>

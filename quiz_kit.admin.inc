@@ -250,7 +250,7 @@ function quiz_kit_section_delete_form_submit($form, &$form_state) {
   $node    = $form_state['quiz_node'];
 
   // Unassign questions from this section.
-  db_update('quiz_kit_question')
+  db_update('quiz_kit_quiz_question')
     ->fields(array('section_id' => 0))
     ->condition('section_id', $section->id)
     ->execute();
@@ -292,15 +292,16 @@ function quiz_kit_questions_form($form, &$form_state, $node) {
   // Load questions ordered by section weight first, then question weight,
   // so the initial table order matches the quiz display order.
   $questions = db_query(
-    'SELECT q.id, q.weight, q.type, q.section_id, r.question_text
-     FROM {quiz_kit_question} q
+    'SELECT qq.id AS qq_id, qq.weight, qq.section_id, q.id, q.type, r.question_text
+     FROM {quiz_kit_quiz_question} qq
+     JOIN {quiz_kit_question} q ON q.id = qq.question_id
      JOIN {quiz_kit_question_revision} r ON r.vid = q.vid
-     LEFT JOIN {quiz_kit_section} s ON s.id = q.section_id
-     WHERE q.nid = :nid
+     LEFT JOIN {quiz_kit_section} s ON s.id = qq.section_id
+     WHERE qq.nid = :nid
      ORDER BY
-       CASE WHEN q.section_id = 0 THEN -1 ELSE COALESCE(s.weight, 0) END,
+       CASE WHEN qq.section_id = 0 THEN -1 ELSE COALESCE(s.weight, 0) END,
        COALESCE(s.id, 0),
-       q.weight,
+       qq.weight,
        q.id',
     array(':nid' => $node->nid)
   )->fetchAll();
@@ -392,10 +393,12 @@ function quiz_kit_questions_form($form, &$form_state, $node) {
  * Section assignment is not changed here — edit the question to reassign it.
  */
 function quiz_kit_questions_form_submit($form, &$form_state) {
+  $node = $form_state['quiz_node'];
   foreach ($form_state['values']['questions'] as $qid => $values) {
-    db_update('quiz_kit_question')
+    db_update('quiz_kit_quiz_question')
       ->fields(array('weight' => (int) $values['weight']))
-      ->condition('id', $qid)
+      ->condition('question_id', $qid)
+      ->condition('nid', $node->nid)
       ->execute();
   }
   backdrop_set_message(t('Question order saved.'));
@@ -497,11 +500,22 @@ function quiz_kit_question_form($form, &$form_state, $node, $question = NULL) {
   )->fetchAllKeyed();
   $section_options += $sections;
 
+  if ($question) {
+    $qq = db_query(
+      'SELECT * FROM {quiz_kit_quiz_question} WHERE question_id = :qid AND nid = :nid',
+      array(':qid' => $question->id, ':nid' => $node->nid)
+    )->fetchObject();
+    $section_id_default = $qq ? (int) $qq->section_id : 0;
+  }
+  else {
+    $section_id_default = 0;
+  }
+
   $form['section_id'] = array(
     '#type'          => 'select',
     '#title'         => t('Section'),
     '#options'       => $section_options,
-    '#default_value' => $question ? (int) $question->section_id : 0,
+    '#default_value' => $section_id_default,
     '#description'   => t('Assign this question to a section. Sections can be managed on the <a href="@url">Sections tab</a>.', array(
       '@url' => url('node/' . $node->nid . '/sections'),
     )),
@@ -513,8 +527,10 @@ function quiz_kit_question_form($form, &$form_state, $node, $question = NULL) {
     '#title' => t('Question'),
     '#default_value' => $question ? _quiz_kit_current_question_text($question) : '',
     '#required' => TRUE,
-    '#rows' => 4,
+    '#rows' => 3,
   );
+
+  $form['#attached']['css'][] = backdrop_get_path('module', 'quiz_kit') . '/quiz_kit.admin.css';
 
   // --- Answers (AJAX-replaceable container) ---
   $form['answers'] = array(
@@ -528,7 +544,7 @@ function quiz_kit_question_form($form, &$form_state, $node, $question = NULL) {
   $form['actions']['#type'] = 'actions';
   $form['actions']['submit'] = array(
     '#type'  => 'submit',
-    '#value' => $question ? t('Save question') : t('Add question'),
+    '#value' => t('Save question'),
   );
   $form['actions']['cancel'] = array(
     '#markup' => l(t('Cancel'), 'node/' . $node->nid . '/questions'),
@@ -554,6 +570,11 @@ function quiz_kit_question_form_validate($form, &$form_state) {
     }
     if ($filled < 2) {
       form_set_error('answers', t('Please provide at least two answer options.'));
+    }
+    if ($type === 'mc_single') {
+      if (!isset($form_state['values']['answers']['correct_single'])) {
+        form_set_error('answers', t('Please select the correct answer.'));
+      }
     }
     if ($type === 'mc_multi' || $type === 'mc_any') {
       $has_correct = FALSE;
@@ -592,32 +613,26 @@ function quiz_kit_question_form_submit($form, &$form_state) {
       ->execute();
 
     db_update('quiz_kit_question')
-      ->fields(array(
-        'vid'        => $vid,
-        'section_id' => $section_id,
-        'changed'    => $now,
-      ))
+      ->fields(array('vid' => $vid, 'changed' => $now))
       ->condition('id', $question->id)
+      ->execute();
+
+    db_update('quiz_kit_quiz_question')
+      ->fields(array('section_id' => $section_id))
+      ->condition('question_id', $question->id)
+      ->condition('nid', $node->nid)
       ->execute();
 
     backdrop_set_message(t('Question updated.'));
   }
   else {
-    // New question: place it at the end of the current list.
-    $next_weight = (int) db_query(
-      'SELECT COUNT(*) FROM {quiz_kit_question} WHERE nid = :nid',
-      array(':nid' => $node->nid)
-    )->fetchField();
-
+    // New question: insert into bank, then create the junction record.
     $qid = db_insert('quiz_kit_question')
       ->fields(array(
-        'nid'        => $node->nid,
-        'vid'        => 0,
-        'type'       => $type,
-        'section_id' => $section_id,
-        'weight'     => $next_weight,
-        'created'    => $now,
-        'changed'    => $now,
+        'vid'     => 0,
+        'type'    => $type,
+        'created' => $now,
+        'changed' => $now,
       ))
       ->execute();
 
@@ -632,6 +647,21 @@ function quiz_kit_question_form_submit($form, &$form_state) {
     db_update('quiz_kit_question')
       ->fields(array('vid' => $vid))
       ->condition('id', $qid)
+      ->execute();
+
+    // Place at the end of this quiz's question list.
+    $next_weight = (int) db_query(
+      'SELECT COUNT(*) FROM {quiz_kit_quiz_question} WHERE nid = :nid',
+      array(':nid' => $node->nid)
+    )->fetchField();
+
+    db_insert('quiz_kit_quiz_question')
+      ->fields(array(
+        'nid'        => $node->nid,
+        'question_id' => $qid,
+        'section_id' => $section_id,
+        'weight'     => $next_weight,
+      ))
       ->execute();
 
     backdrop_set_message(t('Question added.'));
@@ -672,15 +702,39 @@ function _quiz_kit_build_answer_ui(&$form, &$form_state, $type, $existing_answer
 /**
  * Answer UI for multiple-choice question types (single, any, and multi).
  *
- * Tracks rows by stable slot IDs so individual rows can be removed without
- * collapsing adjacent indices. Each slot gets an explicit Remove button when
- * more than two slots exist.
+ * Each answer row contains the correct-answer indicator (radio or checkbox),
+ * the answer text field, and an optional Remove button — all on one line.
+ *
+ * For mc_single the radio buttons share #parents so they act as a group and
+ * their selected value is stored at $form_state['values']['answers']['correct_single'].
  */
 function _quiz_kit_build_mc_ui(&$form, &$form_state, $type, $existing_answers) {
   $slots      = $form_state['answer_slots'];
   $slot_count = count($slots);
-  // Re-index existing answers so position maps to slot order.
   $existing   = array_values($existing_answers);
+
+  // For mc_single, determine which slot is currently the correct answer.
+  $correct_slot = NULL;
+  if ($type === 'mc_single') {
+    $correct_slot = $slots[0];
+    foreach ($existing as $position => $a) {
+      if ($a->is_correct && isset($slots[$position])) {
+        $correct_slot = $slots[$position];
+        break;
+      }
+    }
+  }
+
+  if ($type === 'mc_single') {
+    $hint = t('Select the radio button next to the correct answer. At least 2 answers are required.');
+  }
+  else {
+    $hint = t('Check the box next to each correct answer. At least 2 answers are required.');
+  }
+  $form['answers']['hint'] = array(
+    '#markup' => '<p class="description">' . $hint . '</p>',
+    '#weight' => -1,
+  );
 
   $form['answers']['rows'] = array(
     '#type'       => 'container',
@@ -695,20 +749,35 @@ function _quiz_kit_build_mc_ui(&$form, &$form_state, $type, $existing_answers) {
       '#attributes' => array('class' => array('quiz-kit-answer-row')),
     );
 
+    // Correct-answer indicator — first in the row.
+    if ($type === 'mc_single') {
+      // All per-row radios share the same #parents so they behave as one group.
+      // The selected slot ID ends up at $values['answers']['correct_single'].
+      $form['answers']['rows'][$slot]['is_correct'] = array(
+        '#type'          => 'radio',
+        '#title'         => t('Correct'),
+        '#title_display' => 'invisible',
+        '#parents'       => array('answers', 'correct_single'),
+        '#return_value'  => $slot,
+        '#default_value' => $correct_slot,
+      );
+    }
+    elseif ($type === 'mc_multi' || $type === 'mc_any') {
+      $form['answers']['rows'][$slot]['is_correct'] = array(
+        '#type'          => 'checkbox',
+        '#title'         => t('Correct'),
+        '#title_display' => 'invisible',
+        '#default_value' => $existing_answer ? (int) $existing_answer->is_correct : 0,
+      );
+    }
+
+    // Answer text field — fills remaining space via CSS.
     $form['answers']['rows'][$slot]['text'] = array(
       '#type'          => 'textfield',
       '#title'         => t('Answer @n', array('@n' => $position + 1)),
       '#default_value' => $existing_answer ? $existing_answer->answer_text : '',
       '#required'      => ($position < 2),
     );
-
-    if ($type === 'mc_multi' || $type === 'mc_any') {
-      $form['answers']['rows'][$slot]['is_correct'] = array(
-        '#type'          => 'checkbox',
-        '#title'         => t('Correct'),
-        '#default_value' => $existing_answer ? (int) $existing_answer->is_correct : 0,
-      );
-    }
 
     // Remove button — only shown when more than the minimum two rows exist.
     if ($slot_count > 2) {
@@ -726,28 +795,6 @@ function _quiz_kit_build_mc_ui(&$form, &$form_state, $type, $existing_answers) {
         ),
       );
     }
-  }
-
-  // For mc_single, a radio group below the rows picks which slot is correct.
-  if ($type === 'mc_single') {
-    $correct_slot = $slots[0];
-    foreach ($existing as $position => $a) {
-      if ($a->is_correct && isset($slots[$position])) {
-        $correct_slot = $slots[$position];
-        break;
-      }
-    }
-    $options = array();
-    foreach ($slots as $position => $slot) {
-      $options[$slot] = t('Answer @n', array('@n' => $position + 1));
-    }
-    $form['answers']['correct_single'] = array(
-      '#type'          => 'radios',
-      '#title'         => t('Correct answer'),
-      '#options'       => $options,
-      '#default_value' => $correct_slot,
-      '#required'      => TRUE,
-    );
   }
 
   $form['answers']['add_answer'] = array(
@@ -916,6 +963,104 @@ function _quiz_kit_save_answers($vid, $type, $answers) {
 }
 
 // ---------------------------------------------------------------------------
+// Add existing question form
+// ---------------------------------------------------------------------------
+
+/**
+ * Form: add an existing question from the bank to this quiz.
+ */
+function quiz_kit_question_add_existing_form($form, &$form_state, $node) {
+  $form_state['quiz_node'] = $node;
+
+  // Questions that exist in the bank but are not yet in this quiz.
+  $available = db_query(
+    'SELECT q.id, q.type, r.question_text
+     FROM {quiz_kit_question} q
+     JOIN {quiz_kit_question_revision} r ON r.vid = q.vid
+     WHERE q.id NOT IN (
+       SELECT question_id FROM {quiz_kit_quiz_question} WHERE nid = :nid
+     )
+     ORDER BY r.question_text',
+    array(':nid' => $node->nid)
+  )->fetchAll();
+
+  if (empty($available)) {
+    $form['empty'] = array(
+      '#markup' => t('No questions available. All questions in the bank are already in this quiz.'),
+    );
+    $form['cancel'] = array(
+      '#markup' => '<p>' . l(t('Back to questions'), 'node/' . $node->nid . '/questions') . '</p>',
+    );
+    return $form;
+  }
+
+  $type_labels = quiz_kit_question_type_options();
+  $options = array();
+  foreach ($available as $q) {
+    $type_label = isset($type_labels[$q->type]) ? $type_labels[$q->type] : $q->type;
+    $options[$q->id] = $q->question_text . ' [' . $type_label . ']';
+  }
+
+  $form['question_id'] = array(
+    '#type'     => 'select',
+    '#title'    => t('Question'),
+    '#options'  => $options,
+    '#required' => TRUE,
+  );
+
+  $section_options = array(0 => t('— None —'));
+  $sections = db_query(
+    'SELECT id, title FROM {quiz_kit_section} WHERE nid = :nid ORDER BY weight, id',
+    array(':nid' => $node->nid)
+  )->fetchAllKeyed();
+  $section_options += $sections;
+
+  $form['section_id'] = array(
+    '#type'        => 'select',
+    '#title'       => t('Section'),
+    '#options'     => $section_options,
+    '#description' => t('Optionally assign this question to a section.'),
+  );
+
+  $form['actions']['#type'] = 'actions';
+  $form['actions']['submit'] = array(
+    '#type'  => 'submit',
+    '#value' => t('Add to quiz'),
+  );
+  $form['actions']['cancel'] = array(
+    '#markup' => l(t('Cancel'), 'node/' . $node->nid . '/questions'),
+  );
+
+  return $form;
+}
+
+/**
+ * Submit: add existing question form.
+ */
+function quiz_kit_question_add_existing_form_submit($form, &$form_state) {
+  $node       = $form_state['quiz_node'];
+  $qid        = (int) $form_state['values']['question_id'];
+  $section_id = (int) $form_state['values']['section_id'];
+
+  $next_weight = (int) db_query(
+    'SELECT COUNT(*) FROM {quiz_kit_quiz_question} WHERE nid = :nid',
+    array(':nid' => $node->nid)
+  )->fetchField();
+
+  db_insert('quiz_kit_quiz_question')
+    ->fields(array(
+      'nid'         => $node->nid,
+      'question_id' => $qid,
+      'section_id'  => $section_id,
+      'weight'      => $next_weight,
+    ))
+    ->execute();
+
+  backdrop_set_message(t('Question added to quiz.'));
+  $form_state['redirect'] = 'node/' . $node->nid . '/questions';
+}
+
+// ---------------------------------------------------------------------------
 // Question delete form
 // ---------------------------------------------------------------------------
 
@@ -954,6 +1099,7 @@ function quiz_kit_question_delete_form_submit($form, &$form_state) {
       ->execute();
   }
   db_delete('quiz_kit_question_revision')->condition('id', $question->id)->execute();
+  db_delete('quiz_kit_quiz_question')->condition('question_id', $question->id)->execute();
   db_delete('quiz_kit_question')->condition('id', $question->id)->execute();
 
   backdrop_set_message(t('Question deleted.'));
@@ -995,4 +1141,39 @@ function _quiz_kit_load_answers_for_vid($vid) {
     'SELECT * FROM {quiz_kit_answer} WHERE question_vid = :vid ORDER BY weight, id',
     array(':vid' => $vid)
   )->fetchAll();
+}
+
+// ---------------------------------------------------------------------------
+// Question bank page
+// ---------------------------------------------------------------------------
+
+/**
+ * Page callback: list all questions across all quizzes.
+ */
+function quiz_kit_question_bank_page() {
+  $questions = db_query(
+    'SELECT q.id, q.type, r.question_text, n.title AS quiz_title, qq.nid
+     FROM {quiz_kit_question} q
+     JOIN {quiz_kit_question_revision} r ON r.vid = q.vid
+     JOIN {quiz_kit_quiz_question} qq ON qq.question_id = q.id
+     JOIN {node} n ON n.nid = qq.nid
+     ORDER BY n.title, qq.weight'
+  )->fetchAll();
+
+  if (empty($questions)) {
+    return t('No questions exist yet.');
+  }
+
+  $type_labels = quiz_kit_question_type_options();
+  $header = array(t('Quiz'), t('Type'), t('Question'));
+  $rows = array();
+  foreach ($questions as $q) {
+    $rows[] = array(
+      l(check_plain($q->quiz_title), 'node/' . $q->nid . '/questions'),
+      isset($type_labels[$q->type]) ? $type_labels[$q->type] : check_plain($q->type),
+      check_plain($q->question_text),
+    );
+  }
+
+  return theme('table', array('header' => $header, 'rows' => $rows));
 }

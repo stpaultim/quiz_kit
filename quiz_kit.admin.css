@@ -1,0 +1,55 @@
+/**
+ * @file
+ * Admin form styles for Quiz Kit.
+ */
+
+/* Lay each answer row out horizontally: [indicator] [label+field] [Remove] */
+.quiz-kit-answer-row {
+  display: flex !important;
+  flex-wrap: nowrap;
+  align-items: center !important;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+/* Strip all theme-applied margin/padding from form-items inside a row so
+   heights are consistent and the Remove button stays vertically centred. */
+.quiz-kit-answer-row .form-item {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Correct-answer radio or checkbox — fixed width, no growth */
+.quiz-kit-answer-row .form-type-radio,
+.quiz-kit-answer-row .form-type-checkbox {
+  flex: 0 0 auto;
+}
+
+/* Answer text field — label and input side by side, fills remaining space */
+.quiz-kit-answer-row .form-type-textfield {
+  flex: 1;
+  display: flex !important;
+  align-items: center;
+  gap: 6px;
+}
+
+.quiz-kit-answer-row .form-type-textfield label {
+  white-space: nowrap;
+  margin: 0;
+}
+
+.quiz-kit-answer-row .form-type-textfield .form-text {
+  flex: 1;
+  margin: 0;
+}
+
+/* Remove button — fixed size, explicitly centred in the row */
+.quiz-kit-answer-row input.quiz-kit-remove-answer {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+/* Tighten the gap between the rows block and the Add button */
+.quiz-kit-answer-rows {
+  margin-bottom: 0.75em;
+}

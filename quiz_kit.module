@@ -73,6 +73,14 @@ function quiz_kit_menu() {
     'file' => 'quiz_kit.admin.inc',
   );
 
+  $items['admin/quiz-kit/questions'] = array(
+    'title' => 'Question bank',
+    'description' => 'List all questions across all quizzes.',
+    'page callback' => 'quiz_kit_question_bank_page',
+    'access arguments' => array('administer quiz_kit'),
+    'file' => 'quiz_kit.admin.inc',
+  );
+
   // Sections management tab on quiz nodes.
   $items['node/%node/sections'] = array(
     'title' => 'Sections',
@@ -126,9 +134,19 @@ function quiz_kit_menu() {
   );
 
   $items['node/%node/questions/add'] = array(
-    'title' => 'Add question',
+    'title' => 'Add new question',
     'page callback' => 'backdrop_get_form',
     'page arguments' => array('quiz_kit_question_form', 1, NULL),
+    'access callback' => 'quiz_kit_question_tab_access',
+    'access arguments' => array(1),
+    'type' => MENU_LOCAL_ACTION,
+    'file' => 'quiz_kit.admin.inc',
+  );
+
+  $items['node/%node/questions/add-existing'] = array(
+    'title' => 'Add existing question',
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => array('quiz_kit_question_add_existing_form', 1),
     'access callback' => 'quiz_kit_question_tab_access',
     'access arguments' => array(1),
     'type' => MENU_LOCAL_ACTION,
@@ -246,7 +264,7 @@ function quiz_kit_node_view($node, $view_mode, $langcode) {
   $meta = array();
 
   $question_count = (int) db_query(
-    'SELECT COUNT(*) FROM {quiz_kit_question} WHERE nid = :nid',
+    'SELECT COUNT(*) FROM {quiz_kit_quiz_question} WHERE nid = :nid',
     array(':nid' => $node->nid)
   )->fetchField();
   if ($question_count > 0) {

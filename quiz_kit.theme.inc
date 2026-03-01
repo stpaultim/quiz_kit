@@ -157,4 +157,10 @@ function template_preprocess_quiz_kit_results(&$variables) {
     ? t('Congratulations — you passed!')
     : t('You did not pass. Better luck next time.');
   $variables['date_taken'] = format_date($result->finished, 'medium');
+
+  $answers = $variables['answers'];
+  $variables['total_count']   = count($answers);
+  $variables['correct_count'] = count(array_filter($answers, function($a) {
+    return (bool) $a->is_correct;
+  }));
 }

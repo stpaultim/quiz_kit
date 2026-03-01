@@ -11,19 +11,13 @@ function quiz_kit_schema() {
   $schema = array();
 
   $schema['quiz_kit_question'] = array(
-    'description' => 'Stores quiz questions.',
+    'description' => 'Stores quiz questions (question bank). Quiz membership is in {quiz_kit_quiz_question}.',
     'fields' => array(
       'id' => array(
         'type' => 'serial',
         'unsigned' => TRUE,
         'not null' => TRUE,
         'description' => 'Primary key.',
-      ),
-      'nid' => array(
-        'type' => 'int',
-        'unsigned' => TRUE,
-        'not null' => TRUE,
-        'description' => 'The {node}.nid of the quiz this question belongs to.',
       ),
       'vid' => array(
         'type' => 'int',
@@ -37,19 +31,6 @@ function quiz_kit_schema() {
         'length' => 64,
         'not null' => TRUE,
         'description' => 'Question type: mc_single, mc_multi, truefalse, short_text.',
-      ),
-      'section_id' => array(
-        'type' => 'int',
-        'unsigned' => TRUE,
-        'not null' => TRUE,
-        'default' => 0,
-        'description' => 'The {quiz_kit_section}.id this question belongs to. 0 = no section.',
-      ),
-      'weight' => array(
-        'type' => 'int',
-        'not null' => TRUE,
-        'default' => 0,
-        'description' => 'Display order within the quiz.',
       ),
       'created' => array(
         'type' => 'int',
@@ -65,8 +46,47 @@ function quiz_kit_schema() {
       ),
     ),
     'primary key' => array('id'),
+  );
+
+  $schema['quiz_kit_quiz_question'] = array(
+    'description' => 'Junction table: maps questions to quizzes with per-quiz ordering and section assignment.',
+    'fields' => array(
+      'id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Primary key.',
+      ),
+      'nid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The {node}.nid of the quiz.',
+      ),
+      'question_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'The {quiz_kit_question}.id.',
+      ),
+      'section_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'The {quiz_kit_section}.id this question belongs to. 0 = no section.',
+      ),
+      'weight' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Display order within this quiz.',
+      ),
+    ),
+    'primary key' => array('id'),
     'indexes' => array(
       'nid' => array('nid'),
+      'question_id' => array('question_id'),
     ),
   );
 
@@ -408,6 +428,9 @@ function quiz_kit_install() {
 
   // --- Per-quiz show section scores field ---
   _quiz_kit_create_show_section_scores_field();
+
+  // --- Per-quiz require answers field ---
+  _quiz_kit_create_require_answers_field();
 }
 
 /**
@@ -487,6 +510,44 @@ function _quiz_kit_create_show_section_scores_field() {
 }
 
 /**
+ * Creates the field_quiz_require_answers field and instance.
+ */
+function _quiz_kit_create_require_answers_field() {
+  if (!field_info_field('field_quiz_require_answers')) {
+    field_create_field(array(
+      'field_name'  => 'field_quiz_require_answers',
+      'type'        => 'list_boolean',
+      'cardinality' => 1,
+      'settings'    => array(
+        'allowed_values' => array(0 => '', 1 => ''),
+      ),
+    ));
+  }
+
+  if (!field_info_instance('node', 'field_quiz_require_answers', 'quiz_kit_quiz')) {
+    field_create_instance(array(
+      'field_name'  => 'field_quiz_require_answers',
+      'entity_type' => 'node',
+      'bundle'      => 'quiz_kit_quiz',
+      'label'       => t('Require all answers'),
+      'description' => t('When enabled, quiz-takers must answer every question before proceeding.'),
+      'required'    => FALSE,
+      'widget' => array(
+        'type'     => 'options_onoff',
+        'weight'   => 13,
+        'settings' => array('display_label' => 1),
+      ),
+      'display' => array(
+        'default' => array(
+          'type'  => 'hidden',
+          'label' => 'hidden',
+        ),
+      ),
+    ));
+  }
+}
+
+/**
  * Implements hook_uninstall().
  */
 function quiz_kit_uninstall() {
@@ -497,7 +558,7 @@ function quiz_kit_uninstall() {
   }
 
   // Delete field instances and fields.
-  $fields = array('field_quiz_category', 'field_quiz_pass_rate', 'field_quiz_show_section_scores');
+  $fields = array('field_quiz_category', 'field_quiz_pass_rate', 'field_quiz_show_section_scores', 'field_quiz_require_answers');
   foreach ($fields as $field_name) {
     if ($instance = field_info_instance('node', $field_name, 'quiz_kit_quiz')) {
       field_delete_instance($instance);
@@ -648,6 +709,75 @@ function quiz_kit_update_1005() {
 }
 
 /**
+ * Introduce quiz_kit_quiz_question junction table; remove nid/section_id/weight
+ * from quiz_kit_question.
+ */
+function quiz_kit_update_1008() {
+  // 1. Create the junction table if it doesn't already exist.
+  if (!db_table_exists('quiz_kit_quiz_question')) {
+    db_create_table('quiz_kit_quiz_question', array(
+      'description' => 'Junction table: maps questions to quizzes with per-quiz ordering and section assignment.',
+      'fields' => array(
+        'id' => array(
+          'type' => 'serial',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'description' => 'Primary key.',
+        ),
+        'nid' => array(
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'description' => 'The {node}.nid of the quiz.',
+        ),
+        'question_id' => array(
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'description' => 'The {quiz_kit_question}.id.',
+        ),
+        'section_id' => array(
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'default' => 0,
+          'description' => 'The {quiz_kit_section}.id. 0 = no section.',
+        ),
+        'weight' => array(
+          'type' => 'int',
+          'not null' => TRUE,
+          'default' => 0,
+          'description' => 'Display order within this quiz.',
+        ),
+      ),
+      'primary key' => array('id'),
+      'indexes' => array(
+        'nid' => array('nid'),
+        'question_id' => array('question_id'),
+      ),
+    ));
+  }
+
+  // 2. Migrate existing question rows into the junction table.
+  db_query('INSERT INTO {quiz_kit_quiz_question} (nid, question_id, section_id, weight)
+            SELECT nid, id, section_id, weight FROM {quiz_kit_question}');
+
+  // 3. Drop index and columns from quiz_kit_question.
+  if (db_index_exists('quiz_kit_question', 'nid')) {
+    db_drop_index('quiz_kit_question', 'nid');
+  }
+  if (db_field_exists('quiz_kit_question', 'nid')) {
+    db_drop_field('quiz_kit_question', 'nid');
+  }
+  if (db_field_exists('quiz_kit_question', 'section_id')) {
+    db_drop_field('quiz_kit_question', 'section_id');
+  }
+  if (db_field_exists('quiz_kit_question', 'weight')) {
+    db_drop_field('quiz_kit_question', 'weight');
+  }
+}
+
+/**
  * Fix the show_section_scores field widget to use options_onoff (checkbox).
  */
 function quiz_kit_update_1007() {
@@ -745,4 +875,11 @@ function quiz_kit_update_1006() {
 
   // field_quiz_show_section_scores node field.
   _quiz_kit_create_show_section_scores_field();
+}
+
+/**
+ * Add the per-quiz require_answers field.
+ */
+function quiz_kit_update_1009() {
+  _quiz_kit_create_require_answers_field();
 }

@@ -100,8 +100,15 @@ function quiz_kit_take_form($form, &$form_state, $node, $pages) {
     );
   }
 
+  $required = (bool) _quiz_kit_node_setting($node, 'require_answers', TRUE);
+
   // Render section headers and questions for the current page.
+  // Both headers and questions go inside $form['questions'] so that weights
+  // can interleave them correctly. Top-level section_header elements can't
+  // interleave with the questions container — they always sort after it.
   foreach ($page_data as $group_idx => $group) {
+    $base_weight = $group_idx * 100;
+
     if (!empty($group['section'])) {
       $sec    = $group['section'];
       $markup = '<div class="quiz-kit-section-header">'
@@ -112,15 +119,17 @@ function quiz_kit_take_form($form, &$form_state, $node, $pages) {
           . '</div>';
       }
       $markup .= '</div>';
-      $form['section_header_' . $sec->id] = array(
+      $form['questions']['section_header_' . $sec->id] = array(
         '#markup' => $markup,
-        '#weight' => $group_idx,
+        '#weight' => $base_weight,
       );
     }
 
-    foreach ($group['questions'] as $q) {
-      $answers = _quiz_kit_load_answers($q->vid);
-      $form['questions'][$q->id] = _quiz_kit_question_element($q, $answers);
+    foreach ($group['questions'] as $q_idx => $q) {
+      $answers  = _quiz_kit_load_answers($q->vid);
+      $element  = _quiz_kit_question_element($q, $answers, $required);
+      $element['#weight'] = $base_weight + $q_idx + 1;
+      $form['questions'][$q->id] = $element;
     }
   }
 
@@ -140,6 +149,34 @@ function quiz_kit_take_form($form, &$form_state, $node, $pages) {
   }
 
   return $form;
+}
+
+/**
+ * Validate: quiz-taking form.
+ *
+ * When the quiz requires all answers, radios and textfields are already
+ * covered by #required on the element. mc_multi checkboxes need explicit
+ * validation here because an all-unchecked checkboxes group is not considered
+ * "empty" by Backdrop's built-in required check.
+ */
+function quiz_kit_take_form_validate($form, &$form_state) {
+  $node = $form_state['quiz_node'];
+  if (!(bool) _quiz_kit_node_setting($node, 'require_answers', TRUE)) {
+    return;
+  }
+  if (empty($form_state['values']['questions'])) {
+    return;
+  }
+  foreach ($form_state['values']['questions'] as $qid => $data) {
+    if (!isset($data['answer']) || !is_array($data['answer'])) {
+      continue;
+    }
+    // is_array means this is a checkboxes (mc_multi) answer.
+    if (empty(array_filter($data['answer']))) {
+      form_set_error('questions][' . $qid . '][answer',
+        t('Please select at least one answer for this question.'));
+    }
+  }
 }
 
 /**
@@ -268,8 +305,10 @@ function quiz_kit_result_detail_page($node, $result) {
   )->fetchAll();
 
   // Decode each answer_given into a human-readable string.
+  // For incorrect answers, also attach the correct answer text.
   foreach ($answers as $a) {
     $a->answer_display = _quiz_kit_decode_answer_given($a->type, $a->answer_given);
+    $a->correct_answer_display = $a->is_correct ? NULL : _quiz_kit_correct_answer_display($a->type, $a->question_vid);
   }
 
   $show_correct = (bool) _quiz_kit_node_setting($node, 'show_answers', TRUE);
@@ -380,9 +419,28 @@ function quiz_kit_user_results_page($account) {
  */
 function _quiz_kit_load_questions($nid) {
   return db_query(
-    'SELECT q.* FROM {quiz_kit_question} q WHERE q.nid = :nid ORDER BY q.weight, q.id',
+    'SELECT q.id, q.vid, q.type, qq.section_id, qq.weight
+     FROM {quiz_kit_question} q
+     JOIN {quiz_kit_quiz_question} qq ON qq.question_id = q.id
+     WHERE qq.nid = :nid
+     ORDER BY qq.weight, q.id',
     array(':nid' => $nid)
   )->fetchAll();
+}
+
+/**
+ * Returns the correct answer text for a question revision, for display when
+ * the user answered incorrectly.
+ *
+ * For question types with multiple correct answers (mc_multi, mc_any), all
+ * correct answers are returned as a comma-separated string.
+ */
+function _quiz_kit_correct_answer_display($type, $question_vid) {
+  $texts = db_query(
+    'SELECT answer_text FROM {quiz_kit_answer} WHERE question_vid = :vid AND is_correct = 1 ORDER BY weight',
+    array(':vid' => $question_vid)
+  )->fetchCol();
+  return implode(', ', $texts);
 }
 
 /**
@@ -519,8 +577,12 @@ function _quiz_kit_save_section_scores($result_id, $all_qs, $grade_map) {
 
 /**
  * Builds a form element for a single question.
+ *
+ * @param object $question  The question object.
+ * @param array  $answers   Answer option objects for this question.
+ * @param bool   $required  Whether the question must be answered before submit.
  */
-function _quiz_kit_question_element($question, $answers) {
+function _quiz_kit_question_element($question, $answers, $required = TRUE) {
   $text = db_query('SELECT question_text FROM {quiz_kit_question_revision} WHERE vid = :vid', array(':vid' => $question->vid))->fetchField();
 
   $element = array(
@@ -540,7 +602,7 @@ function _quiz_kit_question_element($question, $answers) {
         '#type'     => 'radios',
         '#title'    => t('Your answer'),
         '#options'  => $options,
-        '#required' => TRUE,
+        '#required' => $required,
       );
       break;
 
@@ -550,9 +612,10 @@ function _quiz_kit_question_element($question, $answers) {
         $options[$a->id] = check_plain($a->answer_text);
       }
       $element['answer'] = array(
-        '#type'    => 'checkboxes',
-        '#title'   => t('Select all that apply'),
-        '#options' => $options,
+        '#type'     => 'checkboxes',
+        '#title'    => t('Select all that apply'),
+        '#options'  => $options,
+        '#required' => $required,
       );
       break;
 
@@ -560,7 +623,7 @@ function _quiz_kit_question_element($question, $answers) {
       $element['answer'] = array(
         '#type'     => 'textfield',
         '#title'    => t('Your answer'),
-        '#required' => TRUE,
+        '#required' => $required,
       );
       break;
   }
