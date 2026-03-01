@@ -32,6 +32,7 @@ function quiz_kit_list_page() {
  * Page callback: take a quiz.
  */
 function quiz_kit_take_page($node) {
+  backdrop_set_title(check_plain($node->title));
   global $user;
 
   // Check attempt limits.
@@ -93,9 +94,12 @@ function quiz_kit_take_form($form, &$form_state, $node, $pages) {
     $form_state['storage']['accumulated_answers'] = array();
   }
 
-  $current_page = $form_state['storage']['current_page'];
-  $total_pages  = count($pages);
-  $page_data    = isset($pages[$current_page]) ? $pages[$current_page] : array();
+  $current_page  = $form_state['storage']['current_page'];
+  $total_pages   = count($pages);
+  $page_data     = isset($pages[$current_page]) ? $pages[$current_page] : array();
+  $lock_watermark = isset($form_state['storage']['lock_watermark']) ? $form_state['storage']['lock_watermark'] : -1;
+
+  list($validate_on_next, ) = _quiz_kit_page_flags($page_data);
 
   $form['#tree'] = TRUE;
 
@@ -135,20 +139,41 @@ function quiz_kit_take_form($form, &$form_state, $node, $pages) {
     }
 
     foreach ($group['questions'] as $q_idx => $q) {
-      $answers  = _quiz_kit_load_answers($q->vid);
-      $element  = _quiz_kit_question_element($q, $answers, $required);
+      $answers      = _quiz_kit_load_answers($q->vid);
+      $saved_answer = isset($form_state['storage']['accumulated_answers'][$q->id]['answer'])
+        ? $form_state['storage']['accumulated_answers'][$q->id]['answer']
+        : NULL;
+      $element  = _quiz_kit_question_element($q, $answers, $required, $saved_answer);
       $element['#weight'] = $base_weight + $q_idx + 1;
       $form['questions'][$q->id] = $element;
     }
   }
 
   $form['actions']['#type'] = 'actions';
+
+  // Back button — shown when not on the first page and not blocked by a lock.
+  $can_go_back = $current_page > 0 && ($current_page - 1 > $lock_watermark);
+  if ($can_go_back) {
+    $form['actions']['back'] = array(
+      '#type'                    => 'submit',
+      '#value'                   => t('Back'),
+      '#submit'                  => array('quiz_kit_take_form_back_submit'),
+      '#limit_validation_errors' => array(),
+      '#weight'                  => -1,
+    );
+  }
+
   if ($current_page < $total_pages - 1) {
-    $form['actions']['next'] = array(
+    $next = array(
       '#type'   => 'submit',
       '#value'  => t('Next'),
       '#submit' => array('quiz_kit_take_form_next_submit'),
     );
+    // Skip validation on Next unless the current page requires it.
+    if (!$validate_on_next) {
+      $next['#limit_validation_errors'] = array();
+    }
+    $form['actions']['next'] = $next;
   }
   else {
     $form['actions']['submit'] = array(
@@ -189,10 +214,26 @@ function quiz_kit_take_form_validate($form, &$form_state) {
 }
 
 /**
+ * Submit: go back to the previous page of the quiz.
+ *
+ * Saves any answers already entered on the current page so they can be
+ * restored if the user navigates forward again, then decrements the page.
+ */
+function quiz_kit_take_form_back_submit($form, &$form_state) {
+  if (!empty($form_state['values']['questions'])) {
+    foreach ($form_state['values']['questions'] as $qid => $data) {
+      $form_state['storage']['accumulated_answers'][$qid] = $data;
+    }
+  }
+  $form_state['storage']['current_page']--;
+  $form_state['rebuild'] = TRUE;
+}
+
+/**
  * Submit: advance to the next page of the quiz.
  *
- * Accumulates this page's answers into storage and triggers a form rebuild
- * so the next page's questions are displayed.
+ * Accumulates this page's answers into storage, records a lock watermark if
+ * the current page's section(s) prevent going back, then triggers a rebuild.
  */
 function quiz_kit_take_form_next_submit($form, &$form_state) {
   // Save answers from the current page.
@@ -200,6 +241,20 @@ function quiz_kit_take_form_next_submit($form, &$form_state) {
     foreach ($form_state['values']['questions'] as $qid => $data) {
       $form_state['storage']['accumulated_answers'][$qid] = $data;
     }
+  }
+
+  // Check whether the current page locks the user from going back.
+  $current_page = $form_state['storage']['current_page'];
+  $pages        = _quiz_kit_compute_pages(
+    $form_state['quiz_node']->nid,
+    _quiz_kit_load_questions($form_state['quiz_node']->nid)
+  );
+  $page_data = isset($pages[$current_page]) ? $pages[$current_page] : array();
+  list(, $lock_on_advance) = _quiz_kit_page_flags($page_data);
+
+  if ($lock_on_advance) {
+    $prev = isset($form_state['storage']['lock_watermark']) ? $form_state['storage']['lock_watermark'] : -1;
+    $form_state['storage']['lock_watermark'] = max($prev, $current_page);
   }
 
   $form_state['storage']['current_page']++;
@@ -275,31 +330,43 @@ function quiz_kit_take_form_submit($form, &$form_state) {
  * Page callback: list all results for a quiz (admin/author view).
  */
 function quiz_kit_results_list_page($node) {
-  $results = db_query(
-    'SELECT r.*, u.name FROM {quiz_kit_result} r
-     LEFT JOIN {users} u ON u.uid = r.uid
-     WHERE r.nid = :nid AND r.finished > 0
-     ORDER BY r.finished DESC',
-    array(':nid' => $node->nid)
-  )->fetchAll();
+  $per_page = (int) (config_get('quiz_kit.settings', 'default_results_per_page') ?: 25);
+  $can_delete = node_access('update', $node);
+
+  $query = db_select('quiz_kit_result', 'r')
+    ->extend('PagerDefault')
+    ->limit($per_page);
+  $query->leftJoin('users', 'u', 'u.uid = r.uid');
+  $query->fields('r');
+  $query->addField('u', 'name');
+  $query->condition('r.nid', $node->nid);
+  $query->condition('r.finished', 0, '>');
+  $query->orderBy('r.finished', 'DESC');
+  $results = $query->execute()->fetchAll();
 
   if (empty($results)) {
     return t('No completed attempts yet.');
   }
 
-  $header = array(t('User'), t('Score'), t('Passed'), t('Date'), t('Detail'));
+  $header = array(t('User'), t('Score'), t('Passed'), t('Date'), t('Actions'));
   $rows = array();
   foreach ($results as $r) {
+    $actions = l(t('View'), 'node/' . $node->nid . '/results/' . $r->id);
+    if ($can_delete) {
+      $actions .= ' | ' . l(t('Delete'), 'node/' . $node->nid . '/results/' . $r->id . '/delete');
+    }
     $rows[] = array(
       check_plain($r->name ?: t('Anonymous')),
       $r->score . '%',
       $r->passed ? t('Yes') : t('No'),
       format_date($r->finished, 'short'),
-      l(t('View'), 'node/' . $node->nid . '/results/' . $r->id),
+      $actions,
     );
   }
 
-  return theme('table', array('header' => $header, 'rows' => $rows));
+  $output  = theme('table', array('header' => $header, 'rows' => $rows));
+  $output .= theme('pager');
+  return $output;
 }
 
 /**
@@ -346,6 +413,38 @@ function quiz_kit_result_detail_page($node, $result) {
     'section_scores'      => $section_scores,
     'show_section_scores' => $show_section_scores,
   ));
+}
+
+/**
+ * Form: confirm result deletion.
+ */
+function quiz_kit_result_delete_form($form, &$form_state, $node, $result) {
+  $form_state['quiz_node'] = $node;
+  $form_state['result']    = $result;
+
+  return confirm_form(
+    $form,
+    t('Are you sure you want to delete this result?'),
+    'node/' . $node->nid . '/results',
+    t('This will permanently delete the result and all recorded answers. This action cannot be undone.'),
+    t('Delete'),
+    t('Cancel')
+  );
+}
+
+/**
+ * Submit: delete a quiz result and all associated records.
+ */
+function quiz_kit_result_delete_form_submit($form, &$form_state) {
+  $result = $form_state['result'];
+  $node   = $form_state['quiz_node'];
+
+  db_delete('quiz_kit_result_answer')->condition('result_id', $result->id)->execute();
+  db_delete('quiz_kit_result_section')->condition('result_id', $result->id)->execute();
+  db_delete('quiz_kit_result')->condition('id', $result->id)->execute();
+
+  backdrop_set_message(t('Result deleted.'));
+  $form_state['redirect'] = 'node/' . $node->nid . '/results';
 }
 
 /**
@@ -589,13 +688,40 @@ function _quiz_kit_save_section_scores($result_id, $all_qs, $grade_map) {
 }
 
 /**
+ * Returns validate_on_next and lock_on_advance flags for a page's groups.
+ *
+ * If ANY section on the page has the flag set, it applies to the whole page.
+ *
+ * @param array $page_data  One page's array of groups from _quiz_kit_compute_pages().
+ *
+ * @return array  array($validate_on_next, $lock_on_advance) as booleans.
+ */
+function _quiz_kit_page_flags($page_data) {
+  $validate_on_next = FALSE;
+  $lock_on_advance  = FALSE;
+  foreach ($page_data as $group) {
+    if (!empty($group['section'])) {
+      if ($group['section']->validate_on_next) {
+        $validate_on_next = TRUE;
+      }
+      if ($group['section']->lock_on_advance) {
+        $lock_on_advance = TRUE;
+      }
+    }
+  }
+  return array($validate_on_next, $lock_on_advance);
+}
+
+/**
  * Builds a form element for a single question.
  *
- * @param object $question  The question object.
- * @param array  $answers   Answer option objects for this question.
- * @param bool   $required  Whether the question must be answered before submit.
+ * @param object     $question      The question object.
+ * @param array      $answers       Answer option objects for this question.
+ * @param bool       $required      Whether the question must be answered before submit.
+ * @param mixed|null $saved_answer  Previously submitted answer value, for restoring
+ *                                  when navigating back. NULL if not yet answered.
  */
-function _quiz_kit_question_element($question, $answers, $required = TRUE) {
+function _quiz_kit_question_element($question, $answers, $required = TRUE, $saved_answer = NULL) {
   $text   = db_query('SELECT question_text FROM {quiz_kit_question_revision} WHERE vid = :vid', array(':vid' => $question->vid))->fetchField();
   $layout = (isset($question->answer_layout) && $question->answer_layout === 'vertical') ? 'vertical' : 'horizontal';
 
@@ -614,10 +740,11 @@ function _quiz_kit_question_element($question, $answers, $required = TRUE) {
         $options[$a->id] = check_plain($a->answer_text);
       }
       $element['answer'] = array(
-        '#type'     => 'radios',
-        '#title'    => t('Your answer'),
-        '#options'  => $options,
-        '#required' => $required,
+        '#type'          => 'radios',
+        '#title'         => t('Your answer'),
+        '#options'       => $options,
+        '#required'      => $required,
+        '#default_value' => ($saved_answer !== NULL) ? $saved_answer : '',
       );
       break;
 
@@ -627,27 +754,30 @@ function _quiz_kit_question_element($question, $answers, $required = TRUE) {
         $options[$a->id] = check_plain($a->answer_text);
       }
       $element['answer'] = array(
-        '#type'     => 'checkboxes',
-        '#title'    => t('Select all that apply'),
-        '#options'  => $options,
-        '#required' => $required,
+        '#type'          => 'checkboxes',
+        '#title'         => t('Select all that apply'),
+        '#options'       => $options,
+        '#required'      => $required,
+        '#default_value' => (is_array($saved_answer)) ? array_keys(array_filter($saved_answer)) : array(),
       );
       break;
 
     case 'short_text':
       $element['answer'] = array(
-        '#type'     => 'textfield',
-        '#title'    => t('Your answer'),
-        '#required' => $required,
+        '#type'          => 'textfield',
+        '#title'         => t('Your answer'),
+        '#required'      => $required,
+        '#default_value' => ($saved_answer !== NULL) ? $saved_answer : '',
       );
       break;
 
     case 'long_text':
       $element['answer'] = array(
-        '#type'     => 'textarea',
-        '#title'    => t('Your response'),
-        '#required' => $required,
-        '#rows'     => 4,
+        '#type'          => 'textarea',
+        '#title'         => t('Your response'),
+        '#required'      => $required,
+        '#rows'          => 4,
+        '#default_value' => ($saved_answer !== NULL) ? $saved_answer : '',
       );
       break;
   }

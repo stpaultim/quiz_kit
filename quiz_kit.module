@@ -64,21 +64,33 @@ function quiz_kit_permission() {
 function quiz_kit_menu() {
   $items = array();
 
-  $items['admin/config/quiz-kit'] = array(
-    'title' => 'Quiz Kit',
-    'description' => 'Configure Quiz Kit global settings.',
-    'page callback' => 'backdrop_get_form',
-    'page arguments' => array('quiz_kit_admin_settings_form'),
+  // Top-level Quiz Kit admin section.
+  $items['admin/quiz-kit'] = array(
+    'title'            => 'Quiz Kit',
+    'description'      => 'Manage Quiz Kit settings and questions.',
+    'page callback'    => 'backdrop_get_form',
+    'page arguments'   => array('quiz_kit_admin_settings_form'),
     'access arguments' => array('administer quiz_kit'),
-    'file' => 'quiz_kit.admin.inc',
+    'type'             => MENU_NORMAL_ITEM,
+    'file'             => 'quiz_kit.admin.inc',
   );
 
+  // Default local task — "Settings" tab maps back to admin/quiz-kit.
+  $items['admin/quiz-kit/settings'] = array(
+    'title'  => 'Settings',
+    'type'   => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => 0,
+  );
+
+  // Question bank tab.
   $items['admin/quiz-kit/questions'] = array(
-    'title' => 'Question bank',
-    'description' => 'List all questions across all quizzes.',
-    'page callback' => 'quiz_kit_question_bank_page',
+    'title'            => 'Question bank',
+    'description'      => 'List all questions across all quizzes.',
+    'page callback'    => 'quiz_kit_question_bank_page',
     'access arguments' => array('administer quiz_kit'),
-    'file' => 'quiz_kit.admin.inc',
+    'type'             => MENU_LOCAL_TASK,
+    'weight'           => 1,
+    'file'             => 'quiz_kit.admin.inc',
   );
 
   // Sections management tab on quiz nodes.
@@ -207,6 +219,15 @@ function quiz_kit_menu() {
     'page arguments' => array(1, 3),
     'access callback' => 'quiz_kit_result_detail_access',
     'access arguments' => array(1, 3),
+    'file' => 'quiz_kit.pages.inc',
+  );
+
+  $items['node/%node/results/%quiz_kit_result/delete'] = array(
+    'title' => 'Delete result',
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => array('quiz_kit_result_delete_form', 1, 3),
+    'access callback' => 'quiz_kit_result_delete_access',
+    'access arguments' => array(1),
     'file' => 'quiz_kit.pages.inc',
   );
 
@@ -407,6 +428,13 @@ function quiz_kit_result_detail_access($node, $result) {
   }
   global $user;
   return user_access('view own quiz results') && (int) $result->uid === (int) $user->uid;
+}
+
+/**
+ * Access callback: Delete a result — quiz editors only.
+ */
+function quiz_kit_result_delete_access($node) {
+  return $node->type === 'quiz_kit_quiz' && node_access('update', $node);
 }
 
 /**

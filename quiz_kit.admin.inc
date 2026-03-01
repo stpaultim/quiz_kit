@@ -28,6 +28,14 @@ function quiz_kit_admin_settings_form($form, &$form_state) {
     '#description' => t('How many times a user may take a quiz. 0 = unlimited. Can be overridden per quiz.'),
   );
 
+  $form['quiz_kit_default_results_per_page'] = array(
+    '#type'          => 'textfield',
+    '#title'         => t('Results per page'),
+    '#default_value' => config_get('quiz_kit.settings', 'default_results_per_page') ?: 25,
+    '#size'          => 5,
+    '#description'   => t('Number of results to show per page on the Results tab.'),
+  );
+
   $form['quiz_kit_default_answer_count'] = array(
     '#type' => 'select',
     '#title' => t('Default number of answer options'),
@@ -48,6 +56,7 @@ function quiz_kit_admin_settings_form($form, &$form_state) {
 function quiz_kit_admin_settings_form_submit($form, &$form_state) {
   config_set('quiz_kit.settings', 'default_pass_rate', (int) $form_state['values']['quiz_kit_default_pass_rate']);
   config_set('quiz_kit.settings', 'default_max_attempts', (int) $form_state['values']['quiz_kit_default_max_attempts']);
+  config_set('quiz_kit.settings', 'default_results_per_page', (int) $form_state['values']['quiz_kit_default_results_per_page']);
   config_set('quiz_kit.settings', 'default_answer_count', (int) $form_state['values']['quiz_kit_default_answer_count']);
   backdrop_set_message(t('Quiz Kit settings saved.'));
 }
@@ -169,6 +178,20 @@ function quiz_kit_section_form($form, &$form_state, $node, $section = NULL) {
     '#description'   => t('When checked, quiz-takers will see a Next button and this section will appear on its own page. Has no effect on the first section that contains questions.'),
   );
 
+  $form['validate_on_next'] = array(
+    '#type'          => 'checkbox',
+    '#title'         => t('Require answers before advancing'),
+    '#default_value' => $section ? (int) $section->validate_on_next : 0,
+    '#description'   => t('When checked, quiz-takers must answer all required questions on this page before the Next button will advance them.'),
+  );
+
+  $form['lock_on_advance'] = array(
+    '#type'          => 'checkbox',
+    '#title'         => t('Prevent going back once advanced'),
+    '#default_value' => $section ? (int) $section->lock_on_advance : 0,
+    '#description'   => t('When checked, quiz-takers cannot use the Back button to return to this page or any earlier page once they have moved past it.'),
+  );
+
   $form['actions']['#type'] = 'actions';
   $form['actions']['submit'] = array(
     '#type'  => 'submit',
@@ -192,9 +215,11 @@ function quiz_kit_section_form_submit($form, &$form_state) {
   if ($section) {
     db_update('quiz_kit_section')
       ->fields(array(
-        'title'        => $values['title'],
-        'instructions' => $values['instructions'],
-        'page_break'   => (int) $values['page_break'],
+        'title'            => $values['title'],
+        'instructions'     => $values['instructions'],
+        'page_break'       => (int) $values['page_break'],
+        'validate_on_next' => (int) $values['validate_on_next'],
+        'lock_on_advance'  => (int) $values['lock_on_advance'],
       ))
       ->condition('id', $section->id)
       ->execute();
@@ -208,11 +233,13 @@ function quiz_kit_section_form_submit($form, &$form_state) {
 
     db_insert('quiz_kit_section')
       ->fields(array(
-        'nid'          => $node->nid,
-        'title'        => $values['title'],
-        'instructions' => $values['instructions'],
-        'weight'       => $next_weight,
-        'page_break'   => (int) $values['page_break'],
+        'nid'              => $node->nid,
+        'title'            => $values['title'],
+        'instructions'     => $values['instructions'],
+        'weight'           => $next_weight,
+        'page_break'       => (int) $values['page_break'],
+        'validate_on_next' => (int) $values['validate_on_next'],
+        'lock_on_advance'  => (int) $values['lock_on_advance'],
       ))
       ->execute();
     backdrop_set_message(t('Section added.'));
@@ -1206,14 +1233,21 @@ function _quiz_kit_load_answers_for_vid($vid) {
  * Page callback: list all questions across all quizzes.
  */
 function quiz_kit_question_bank_page() {
-  $questions = db_query(
-    'SELECT q.id, q.type, r.question_text, n.title AS quiz_title, qq.nid
-     FROM {quiz_kit_question} q
-     JOIN {quiz_kit_question_revision} r ON r.vid = q.vid
-     JOIN {quiz_kit_quiz_question} qq ON qq.question_id = q.id
-     JOIN {node} n ON n.nid = qq.nid
-     ORDER BY n.title, qq.weight'
-  )->fetchAll();
+  $per_page = (int) (config_get('quiz_kit.settings', 'default_results_per_page') ?: 25);
+
+  $query = db_select('quiz_kit_question', 'q')
+    ->extend('PagerDefault')
+    ->limit($per_page);
+  $query->join('quiz_kit_question_revision', 'r', 'r.vid = q.vid');
+  $query->join('quiz_kit_quiz_question', 'qq', 'qq.question_id = q.id');
+  $query->join('node', 'n', 'n.nid = qq.nid');
+  $query->fields('q', array('id', 'type'));
+  $query->addField('r', 'question_text');
+  $query->addField('n', 'title', 'quiz_title');
+  $query->addField('n', 'nid');
+  $query->orderBy('n.title');
+  $query->orderBy('qq.weight');
+  $questions = $query->execute()->fetchAll();
 
   if (empty($questions)) {
     return t('No questions exist yet.');
@@ -1230,5 +1264,7 @@ function quiz_kit_question_bank_page() {
     );
   }
 
-  return theme('table', array('header' => $header, 'rows' => $rows));
+  $output  = theme('table', array('header' => $header, 'rows' => $rows));
+  $output .= theme('pager');
+  return $output;
 }

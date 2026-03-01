@@ -7,4 +7,4 @@ version = 1.0.0
 
 stylesheets[all][] = css/quiz_kit.css
 
-configure = admin/config/quiz-kit
+configure = admin/quiz-kit

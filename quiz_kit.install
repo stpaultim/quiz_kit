@@ -319,6 +319,20 @@ function quiz_kit_schema() {
         'default' => 0,
         'description' => '1 if this section begins a new quiz page.',
       ),
+      'validate_on_next' => array(
+        'type'     => 'int',
+        'size'     => 'tiny',
+        'not null' => TRUE,
+        'default'  => 0,
+        'description' => '1 if all required questions on this page must be answered before advancing.',
+      ),
+      'lock_on_advance' => array(
+        'type'     => 'int',
+        'size'     => 'tiny',
+        'not null' => TRUE,
+        'default'  => 0,
+        'description' => '1 if the user cannot go back past this section once they advance.',
+      ),
     ),
     'primary key' => array('id'),
     'indexes' => array(
@@ -437,6 +451,9 @@ function quiz_kit_install() {
     ),
   ));
 
+  // --- Per-quiz max attempts field ---
+  _quiz_kit_create_max_attempts_field();
+
   // --- Per-quiz pass rate field ---
   _quiz_kit_create_pass_rate_field();
 
@@ -445,6 +462,41 @@ function quiz_kit_install() {
 
   // --- Per-quiz require answers field ---
   _quiz_kit_create_require_answers_field();
+}
+
+/**
+ * Creates the field_quiz_max_attempts field and instance.
+ */
+function _quiz_kit_create_max_attempts_field() {
+  if (!field_info_field('field_quiz_max_attempts')) {
+    field_create_field(array(
+      'field_name'  => 'field_quiz_max_attempts',
+      'type'        => 'number_integer',
+      'cardinality' => 1,
+    ));
+  }
+
+  if (!field_info_instance('node', 'field_quiz_max_attempts', 'quiz_kit_quiz')) {
+    field_create_instance(array(
+      'field_name'  => 'field_quiz_max_attempts',
+      'entity_type' => 'node',
+      'bundle'      => 'quiz_kit_quiz',
+      'label'       => t('Maximum attempts'),
+      'description' => t('How many times a user may take this quiz. Leave blank to use the site-wide default (0 = unlimited).'),
+      'required'    => FALSE,
+      'settings'    => array('min' => 0),
+      'widget'      => array(
+        'type'   => 'number',
+        'weight' => 14,
+      ),
+      'display' => array(
+        'default' => array(
+          'type'  => 'hidden',
+          'label' => 'hidden',
+        ),
+      ),
+    ));
+  }
 }
 
 /**
@@ -572,7 +624,7 @@ function quiz_kit_uninstall() {
   }
 
   // Delete field instances and fields.
-  $fields = array('field_quiz_category', 'field_quiz_pass_rate', 'field_quiz_show_section_scores', 'field_quiz_require_answers');
+  $fields = array('field_quiz_category', 'field_quiz_max_attempts', 'field_quiz_pass_rate', 'field_quiz_show_section_scores', 'field_quiz_require_answers');
   foreach ($fields as $field_name) {
     if ($instance = field_info_instance('node', $field_name, 'quiz_kit_quiz')) {
       field_delete_instance($instance);
@@ -896,6 +948,37 @@ function quiz_kit_update_1006() {
  */
 function quiz_kit_update_1009() {
   _quiz_kit_create_require_answers_field();
+}
+
+/**
+ * Add the per-quiz max_attempts field to existing installations.
+ */
+function quiz_kit_update_1013() {
+  _quiz_kit_create_max_attempts_field();
+}
+
+/**
+ * Add validate_on_next and lock_on_advance columns to quiz_kit_section.
+ */
+function quiz_kit_update_1012() {
+  if (!db_field_exists('quiz_kit_section', 'validate_on_next')) {
+    db_add_field('quiz_kit_section', 'validate_on_next', array(
+      'type'     => 'int',
+      'size'     => 'tiny',
+      'not null' => TRUE,
+      'default'  => 0,
+      'description' => '1 if required questions must be answered before advancing past this page.',
+    ));
+  }
+  if (!db_field_exists('quiz_kit_section', 'lock_on_advance')) {
+    db_add_field('quiz_kit_section', 'lock_on_advance', array(
+      'type'     => 'int',
+      'size'     => 'tiny',
+      'not null' => TRUE,
+      'default'  => 0,
+      'description' => '1 if the user cannot go back past this section once they advance.',
+    ));
+  }
 }
 
 /**
