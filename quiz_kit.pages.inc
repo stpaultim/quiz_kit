@@ -76,6 +76,7 @@ function quiz_kit_take_page($node) {
  */
 function quiz_kit_take_form($form, &$form_state, $node, $pages) {
   $form_state['quiz_node'] = $node;
+  $form_state['cache'] = TRUE;
 
   // Initialise persistent storage on the first build only.
   if (!isset($form_state['storage']['result_id'])) {
@@ -102,6 +103,25 @@ function quiz_kit_take_form($form, &$form_state, $node, $pages) {
   list($validate_on_next, ) = _quiz_kit_page_flags($page_data);
 
   $form['#tree'] = TRUE;
+
+  // Timer for timed quizzes.
+  $time_limit = (int) _quiz_kit_node_setting($node, 'time_limit', 0);
+  if ($time_limit > 0) {
+    $started   = (int) db_query('SELECT started FROM {quiz_kit_result} WHERE id = :id',
+      array(':id' => $form_state['storage']['result_id']))->fetchField();
+    $elapsed   = REQUEST_TIME - $started;
+    $remaining = ($time_limit * 60) - $elapsed;
+    if ($remaining < 0) {
+      $remaining = 0;
+    }
+    $form['timer'] = array(
+      '#markup' => '<div class="quiz-kit-timer" data-time-limit="' . (int) $remaining . '">'
+        . t('Time remaining: <span class="quiz-kit-countdown"></span>')
+        . '</div>',
+      '#weight' => -20,
+    );
+    $form['#attached']['js'][] = backdrop_get_path('module', 'quiz_kit') . '/js/quiz_kit.js';
+  }
 
   // Progress indicator for multi-page quizzes.
   if ($total_pages > 1) {
@@ -182,6 +202,21 @@ function quiz_kit_take_form($form, &$form_state, $node, $pages) {
     );
   }
 
+  // Hidden timeout button — JS triggers this when the timer expires.
+  if ($time_limit > 0) {
+    $form['actions']['timeout'] = array(
+      '#type'                    => 'submit',
+      '#value'                   => t('Time expired'),
+      '#submit'                  => array('quiz_kit_take_form_timeout_submit'),
+      '#limit_validation_errors' => array(array('questions')),
+      '#attributes'              => array(
+        'class' => array('quiz-kit-timeout-submit'),
+        'style' => 'display:none',
+      ),
+      '#weight' => 100,
+    );
+  }
+
   return $form;
 }
 
@@ -230,6 +265,23 @@ function quiz_kit_take_form_back_submit($form, &$form_state) {
 }
 
 /**
+ * Submit: timer expired — grade whatever has been answered so far.
+ *
+ * Merges accumulated answers with any answers on the current page, then
+ * delegates to the final grading logic.
+ */
+function quiz_kit_take_form_timeout_submit($form, &$form_state) {
+  // Save current page answers.
+  if (!empty($form_state['values']['questions'])) {
+    foreach ($form_state['values']['questions'] as $qid => $data) {
+      $form_state['storage']['accumulated_answers'][$qid] = $data;
+    }
+  }
+  // Delegate to the main submit handler for grading.
+  quiz_kit_take_form_submit($form, $form_state);
+}
+
+/**
  * Submit: advance to the next page of the quiz.
  *
  * Accumulates this page's answers into storage, records a lock watermark if
@@ -267,6 +319,18 @@ function quiz_kit_take_form_next_submit($form, &$form_state) {
 function quiz_kit_take_form_submit($form, &$form_state) {
   $node      = $form_state['quiz_node'];
   $result_id = $form_state['storage']['result_id'];
+
+  // Server-side time limit enforcement.
+  $time_limit = (int) _quiz_kit_node_setting($node, 'time_limit', 0);
+  if ($time_limit > 0) {
+    $started = (int) db_query('SELECT started FROM {quiz_kit_result} WHERE id = :id',
+      array(':id' => $result_id))->fetchField();
+    $elapsed = REQUEST_TIME - $started;
+    // Allow a small grace period (5 seconds) for network latency.
+    if ($elapsed > ($time_limit * 60) + 5) {
+      backdrop_set_message(t('Your time has expired. The quiz has been submitted with the answers provided.'), 'warning');
+    }
+  }
 
   // Merge answers accumulated from earlier pages with the final page's answers.
   $responses = $form_state['storage']['accumulated_answers'];
@@ -333,6 +397,17 @@ function quiz_kit_results_list_page($node) {
   $per_page = (int) (config_get('quiz_kit.settings', 'default_results_per_page') ?: 25);
   $can_delete = node_access('update', $node);
 
+  // Find questions flagged to show in the results list (max 2).
+  $show_questions = db_query(
+    'SELECT q.id, q.type, q.vid, r.question_text
+     FROM {quiz_kit_question} q
+     JOIN {quiz_kit_quiz_question} qq ON qq.question_id = q.id
+     JOIN {quiz_kit_question_revision} r ON r.vid = q.vid
+     WHERE qq.nid = :nid AND q.show_in_results = 1
+     ORDER BY qq.weight, q.id',
+    array(':nid' => $node->nid)
+  )->fetchAll();
+
   $query = db_select('quiz_kit_result', 'r')
     ->extend('PagerDefault')
     ->limit($per_page);
@@ -348,20 +423,50 @@ function quiz_kit_results_list_page($node) {
     return t('No completed attempts yet.');
   }
 
-  $header = array(t('User'), t('Score'), t('Passed'), t('Date'), t('Actions'));
+  // If there are show_in_results questions, load their answers for all results.
+  $extra_answers = array();
+  if (!empty($show_questions)) {
+    $result_ids  = array_map(function ($r) { return $r->id; }, $results);
+    $question_ids = array_map(function ($q) { return $q->id; }, $show_questions);
+    $ra_rows = db_query(
+      'SELECT ra.result_id, ra.question_id, ra.answer_given, q.type
+       FROM {quiz_kit_result_answer} ra
+       JOIN {quiz_kit_question} q ON q.id = ra.question_id
+       WHERE ra.result_id IN (:rids) AND ra.question_id IN (:qids)',
+      array(':rids' => $result_ids, ':qids' => $question_ids)
+    )->fetchAll();
+    foreach ($ra_rows as $ra) {
+      $extra_answers[$ra->result_id][$ra->question_id] = _quiz_kit_decode_answer_given($ra->type, $ra->answer_given);
+    }
+  }
+
+  // Build table header with extra columns after User.
+  $header = array(t('User'));
+  foreach ($show_questions as $sq) {
+    $header[] = check_plain($sq->question_text);
+  }
+  $header[] = t('Score');
+  $header[] = t('Passed');
+  $header[] = t('Date');
+  $header[] = t('Actions');
+
   $rows = array();
   foreach ($results as $r) {
     $actions = l(t('View'), 'node/' . $node->nid . '/results/' . $r->id);
     if ($can_delete) {
       $actions .= ' | ' . l(t('Delete'), 'node/' . $node->nid . '/results/' . $r->id . '/delete');
     }
-    $rows[] = array(
-      check_plain($r->name ?: t('Anonymous')),
-      $r->score . '%',
-      $r->passed ? t('Yes') : t('No'),
-      format_date($r->finished, 'short'),
-      $actions,
-    );
+    $row = array(check_plain($r->name ?: t('Anonymous')));
+    foreach ($show_questions as $sq) {
+      $row[] = isset($extra_answers[$r->id][$sq->id])
+        ? check_plain($extra_answers[$r->id][$sq->id])
+        : '';
+    }
+    $row[] = $r->score . '%';
+    $row[] = $r->passed ? t('Yes') : t('No');
+    $row[] = format_date($r->finished, 'short');
+    $row[] = $actions;
+    $rows[] = $row;
   }
 
   $output  = theme('table', array('header' => $header, 'rows' => $rows));

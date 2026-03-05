@@ -58,6 +58,13 @@ function quiz_kit_schema() {
         'default'     => 1,
         'description' => '1 if this question is included in the quiz score; 0 for unscored/metadata questions.',
       ),
+      'show_in_results' => array(
+        'type'        => 'int',
+        'size'        => 'tiny',
+        'not null'    => TRUE,
+        'default'     => 0,
+        'description' => '1 if this question\'s answer should appear as a column in the results list.',
+      ),
     ),
     'primary key' => array('id'),
   );
@@ -451,6 +458,9 @@ function quiz_kit_install() {
     ),
   ));
 
+  // --- Per-quiz time limit field ---
+  _quiz_kit_create_time_limit_field();
+
   // --- Per-quiz max attempts field ---
   _quiz_kit_create_max_attempts_field();
 
@@ -624,7 +634,7 @@ function quiz_kit_uninstall() {
   }
 
   // Delete field instances and fields.
-  $fields = array('field_quiz_category', 'field_quiz_max_attempts', 'field_quiz_pass_rate', 'field_quiz_show_section_scores', 'field_quiz_require_answers');
+  $fields = array('field_quiz_category', 'field_quiz_max_attempts', 'field_quiz_pass_rate', 'field_quiz_show_section_scores', 'field_quiz_require_answers', 'field_quiz_time_limit');
   foreach ($fields as $field_name) {
     if ($instance = field_info_instance('node', $field_name, 'quiz_kit_quiz')) {
       field_delete_instance($instance);
@@ -1007,6 +1017,63 @@ function quiz_kit_update_1010() {
       'not null' => TRUE,
       'default'  => 'horizontal',
       'description' => 'Display layout for answers during quiz-taking: horizontal or vertical.',
+    ));
+  }
+}
+
+/**
+ * Add the per-quiz time limit field.
+ */
+function quiz_kit_update_1014() {
+  _quiz_kit_create_time_limit_field();
+}
+
+/**
+ * Creates the field_quiz_time_limit field and instance.
+ */
+function _quiz_kit_create_time_limit_field() {
+  if (!field_info_field('field_quiz_time_limit')) {
+    field_create_field(array(
+      'field_name'  => 'field_quiz_time_limit',
+      'type'        => 'number_integer',
+      'cardinality' => 1,
+    ));
+  }
+
+  if (!field_info_instance('node', 'field_quiz_time_limit', 'quiz_kit_quiz')) {
+    field_create_instance(array(
+      'field_name'  => 'field_quiz_time_limit',
+      'entity_type' => 'node',
+      'bundle'      => 'quiz_kit_quiz',
+      'label'       => t('Time limit (minutes)'),
+      'description' => t('Maximum time allowed to complete the quiz. Leave blank or 0 for no time limit.'),
+      'required'    => FALSE,
+      'settings'    => array('min' => 0),
+      'widget'      => array(
+        'type'   => 'number',
+        'weight' => 15,
+      ),
+      'display' => array(
+        'default' => array(
+          'type'  => 'hidden',
+          'label' => 'hidden',
+        ),
+      ),
+    ));
+  }
+}
+
+/**
+ * Add show_in_results column to quiz_kit_question.
+ */
+function quiz_kit_update_1015() {
+  if (!db_field_exists('quiz_kit_question', 'show_in_results')) {
+    db_add_field('quiz_kit_question', 'show_in_results', array(
+      'type'     => 'int',
+      'size'     => 'tiny',
+      'not null' => TRUE,
+      'default'  => 0,
+      'description' => '1 if this question\'s answer should appear as a column in the results list.',
     ));
   }
 }
