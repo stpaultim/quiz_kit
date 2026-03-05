@@ -5,8 +5,8 @@
    * Countdown timer for timed quizzes.
    *
    * Reads data-time-limit (seconds) from .quiz-kit-timer and counts down,
-   * updating .quiz-kit-countdown. Submits the form automatically when time
-   * expires.
+   * updating .quiz-kit-countdown. When time expires, clicks the hidden
+   * timeout submit button to auto-submit the quiz.
    */
   Backdrop.behaviors.quizKitTimer = {
     attach: function (context, settings) {
@@ -21,6 +21,7 @@
       }
 
       var $display = $timer.find('.quiz-kit-countdown');
+      var warned = false;
 
       function formatTime(s) {
         var m = Math.floor(s / 60);
@@ -34,10 +35,23 @@
         seconds -= 1;
         $display.text(formatTime(seconds));
 
+        // Visual warning when under 60 seconds.
+        if (seconds <= 60 && !warned) {
+          warned = true;
+          $timer.addClass('quiz-kit-timer-warning');
+        }
+
         if (seconds <= 0) {
           clearInterval(interval);
-          // Auto-submit the quiz form.
-          $timer.closest('form').find('[type="submit"]').first().trigger('click');
+          // Click the hidden timeout button to submit and grade the quiz.
+          var $timeout = $timer.closest('form').find('.quiz-kit-timeout-submit');
+          if ($timeout.length) {
+            $timeout.trigger('click');
+          }
+          else {
+            // Fallback: click the last visible submit button (Submit quiz).
+            $timer.closest('form').find('[type="submit"]:visible').last().trigger('click');
+          }
         }
       }, 1000);
     }

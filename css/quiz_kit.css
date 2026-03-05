@@ -52,6 +52,12 @@
   padding: 0.4em 0.8em;
 }
 
+.quiz-kit-timer-warning {
+  background: #fff3f3;
+  border-color: #d00;
+  color: #b00000;
+}
+
 /* Progress indicator */
 .quiz-kit-progress {
   color: #555;

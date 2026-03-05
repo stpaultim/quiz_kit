@@ -28,6 +28,14 @@ function quiz_kit_admin_settings_form($form, &$form_state) {
     '#description' => t('How many times a user may take a quiz. 0 = unlimited. Can be overridden per quiz.'),
   );
 
+  $form['quiz_kit_default_time_limit'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Default time limit (minutes)'),
+    '#default_value' => config_get('quiz_kit.settings', 'default_time_limit') ?: 0,
+    '#size' => 5,
+    '#description' => t('Maximum time allowed to complete a quiz. 0 = no time limit. Can be overridden per quiz.'),
+  );
+
   $form['quiz_kit_default_results_per_page'] = array(
     '#type'          => 'textfield',
     '#title'         => t('Results per page'),
@@ -56,6 +64,7 @@ function quiz_kit_admin_settings_form($form, &$form_state) {
 function quiz_kit_admin_settings_form_submit($form, &$form_state) {
   config_set('quiz_kit.settings', 'default_pass_rate', (int) $form_state['values']['quiz_kit_default_pass_rate']);
   config_set('quiz_kit.settings', 'default_max_attempts', (int) $form_state['values']['quiz_kit_default_max_attempts']);
+  config_set('quiz_kit.settings', 'default_time_limit', (int) $form_state['values']['quiz_kit_default_time_limit']);
   config_set('quiz_kit.settings', 'default_results_per_page', (int) $form_state['values']['quiz_kit_default_results_per_page']);
   config_set('quiz_kit.settings', 'default_answer_count', (int) $form_state['values']['quiz_kit_default_answer_count']);
   backdrop_set_message(t('Quiz Kit settings saved.'));
@@ -584,6 +593,17 @@ function quiz_kit_question_form($form, &$form_state, $node, $question = NULL) {
     '#description'   => t('Uncheck for metadata questions (e.g. Name, Class) whose responses should be recorded but not counted toward the score.'),
   );
 
+  $show_default = 0;
+  if ($question && isset($question->show_in_results)) {
+    $show_default = (int) $question->show_in_results;
+  }
+  $form['show_in_results'] = array(
+    '#type'          => 'checkbox',
+    '#title'         => t('Show answer in results list'),
+    '#default_value' => $show_default,
+    '#description'   => t('Display this question\'s answer as a column in the results table. Maximum 2 per quiz.'),
+  );
+
   $form['#attached']['css'][] = backdrop_get_path('module', 'quiz_kit') . '/css/quiz_kit.admin.css';
 
   // --- Answers (AJAX-replaceable container) ---
@@ -614,6 +634,24 @@ function quiz_kit_question_form_validate($form, &$form_state) {
   $type = $form_state['question']
     ? $form_state['question']->type
     : $form_state['values']['type'];
+
+  // Enforce maximum of 2 show_in_results questions per quiz.
+  if (!empty($form_state['values']['show_in_results'])) {
+    $node     = $form_state['quiz_node'];
+    $question = $form_state['question'];
+    $exclude  = $question ? (int) $question->id : 0;
+    $query = db_select('quiz_kit_question', 'q');
+    $query->join('quiz_kit_quiz_question', 'qq', 'qq.question_id = q.id');
+    $query->condition('qq.nid', $node->nid);
+    $query->condition('q.show_in_results', 1);
+    if ($exclude) {
+      $query->condition('q.id', $exclude, '<>');
+    }
+    $count = $query->countQuery()->execute()->fetchField();
+    if ($count >= 2) {
+      form_set_error('show_in_results', t('A maximum of 2 questions per quiz can be shown in the results list. Please uncheck this option on another question first.'));
+    }
+  }
 
   if (in_array($type, array('mc_single', 'mc_any', 'mc_multi'))) {
     $filled = 0;
@@ -655,8 +693,9 @@ function quiz_kit_question_form_submit($form, &$form_state) {
   $now       = REQUEST_TIME;
   $type      = $question ? $question->type : $values['type'];
   $section_id    = isset($values['section_id'])    ? (int) $values['section_id']   : 0;
-  $scored        = isset($values['scored'])        ? (int) $values['scored']       : 1;
-  $answer_layout = isset($values['answer_layout']) ? $values['answer_layout']      : 'horizontal';
+  $scored          = isset($values['scored'])          ? (int) $values['scored']          : 1;
+  $show_in_results = isset($values['show_in_results']) ? (int) $values['show_in_results'] : 0;
+  $answer_layout   = isset($values['answer_layout'])   ? $values['answer_layout']         : 'horizontal';
   if (!in_array($answer_layout, array('horizontal', 'vertical'))) {
     $answer_layout = 'horizontal';
   }
@@ -672,7 +711,7 @@ function quiz_kit_question_form_submit($form, &$form_state) {
       ->execute();
 
     db_update('quiz_kit_question')
-      ->fields(array('vid' => $vid, 'changed' => $now, 'answer_layout' => $answer_layout, 'scored' => $scored))
+      ->fields(array('vid' => $vid, 'changed' => $now, 'answer_layout' => $answer_layout, 'scored' => $scored, 'show_in_results' => $show_in_results))
       ->condition('id', $question->id)
       ->execute();
 
@@ -692,8 +731,9 @@ function quiz_kit_question_form_submit($form, &$form_state) {
         'type'          => $type,
         'created'       => $now,
         'changed'       => $now,
-        'answer_layout' => $answer_layout,
-        'scored'        => $scored,
+        'answer_layout'   => $answer_layout,
+        'scored'          => $scored,
+        'show_in_results' => $show_in_results,
       ))
       ->execute();
 
@@ -730,7 +770,9 @@ function quiz_kit_question_form_submit($form, &$form_state) {
 
   // Save answers for this revision. Old answers are intentionally kept so
   // that stored results always reflect what respondents actually saw.
-  _quiz_kit_save_answers($vid, $type, $values['answers']);
+  if (isset($values['answers'])) {
+    _quiz_kit_save_answers($vid, $type, $values['answers']);
+  }
 
   $form_state['redirect'] = 'node/' . $node->nid . '/questions';
 }
