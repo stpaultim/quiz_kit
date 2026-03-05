@@ -158,7 +158,7 @@ function quiz_kit_take_form($form, &$form_state, $node, $pages) {
       '#type'                    => 'submit',
       '#value'                   => t('Back'),
       '#submit'                  => array('quiz_kit_take_form_back_submit'),
-      '#limit_validation_errors' => array(),
+      '#limit_validation_errors' => array(array('questions')),
       '#weight'                  => -1,
     );
   }
@@ -171,7 +171,7 @@ function quiz_kit_take_form($form, &$form_state, $node, $pages) {
     );
     // Skip validation on Next unless the current page requires it.
     if (!$validate_on_next) {
-      $next['#limit_validation_errors'] = array();
+      $next['#limit_validation_errors'] = array(array('questions'));
     }
     $form['actions']['next'] = $next;
   }
