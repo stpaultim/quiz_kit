@@ -42,10 +42,19 @@ Questions can be grouped into named sections. Each section supports:
 ### Multi-page Navigation
 When sections have page breaks, the quiz is split into multiple pages. Quiz-takers can freely move forward and back between pages (unless a section lock prevents it). Partially entered answers are preserved when navigating between pages.
 
+### Time Limit
+Quizzes can have an optional time limit (in minutes). When a time limit is set:
+- A countdown timer is displayed throughout the quiz, persisting across page navigation.
+- The timer turns red when less than 60 seconds remain.
+- When time expires, the quiz is automatically submitted and graded with whatever answers have been provided.
+- Time limits are enforced server-side to prevent circumvention.
+- A site-wide default can be set, with per-quiz overrides.
+
 ### Per-quiz Settings
 The following can be configured on each quiz node, overriding site-wide defaults where applicable:
 - **Pass rate (%)** — score required to pass.
 - **Maximum attempts** — how many times a user may take the quiz (0 = unlimited).
+- **Time limit (minutes)** — maximum time to complete the quiz (0 = no limit).
 - **Show section scores** — displays a score breakdown by section on the results page.
 - **Require all answers** — quiz-takers must answer every question before submitting.
 
@@ -58,6 +67,9 @@ All questions across all quizzes are listed at **Admin > Quiz Kit > Question ban
 - The answer review table highlights incorrect answers and (optionally) shows the correct answer.
 - Quiz editors can **delete individual results**, for example to remove test attempts.
 - The results list is paginated; page size is configurable in the global settings.
+
+#### Show Answer in Results List
+Individual questions can be flagged with **Show answer in results list** (up to 2 per quiz). When enabled, that question's answer appears as an extra column in the results table — useful for metadata questions like "Name" or "Class" that help identify respondents at a glance.
 
 ### Unpublished Quiz Preview
 Editors with permission to edit a quiz can take it while it is unpublished, allowing them to test it before making it available to users. A warning banner reminds editors that they are previewing an unpublished quiz.
